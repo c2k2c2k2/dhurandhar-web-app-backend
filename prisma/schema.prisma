@@ -1,0 +1,1121 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserType {
+  STUDENT
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  BLOCKED
+}
+
+enum OtpPurpose {
+  LOGIN
+  PASSWORD_RESET
+}
+
+enum FileAssetPurpose {
+  NOTES_PDF
+  PRINT_PDF
+  QUESTION_IMAGE
+  OPTION_IMAGE
+  EXPLANATION_IMAGE
+  OTHER
+}
+
+enum AssetResourceType {
+  NOTE
+  QUESTION
+  PAGE
+  BANNER
+  ANNOUNCEMENT
+  HOME_SECTION
+  PRINT_JOB
+  USER
+}
+
+enum NoteSecuritySignalType {
+  RANGE_SCRAPE
+  TOKEN_REUSE
+  RATE_LIMIT
+  SUSPICIOUS_DEVICE
+}
+
+enum QuestionType {
+  SINGLE_CHOICE
+  MULTI_CHOICE
+  TRUE_FALSE
+  INTEGER
+  SHORT_ANSWER
+}
+
+enum QuestionDifficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum TestType {
+  SUBJECT
+  COMBINED
+  CUSTOM
+}
+
+enum AttemptStatus {
+  STARTED
+  IN_PROGRESS
+  SUBMITTED
+  EVALUATED
+}
+
+enum AttemptEventType {
+  START
+  SAVE
+  SUBMIT
+}
+
+enum PracticeMode {
+  PRACTICE
+  TIMED
+  CUSTOM
+}
+
+enum PracticeSessionStatus {
+  ACTIVE
+  ENDED
+  CANCELLED
+}
+
+enum PracticeEventType {
+  SERVED
+  ANSWERED
+  SKIPPED
+  REVEALED
+  BOOKMARKED
+}
+
+enum SubscriptionStatus {
+  PENDING
+  ACTIVE
+  EXPIRED
+  CANCELLED
+}
+
+enum EntitlementKind {
+  NOTES
+  TESTS
+  PRACTICE
+  ALL
+}
+
+enum PaymentProvider {
+  PHONEPE
+}
+
+enum PaymentOrderStatus {
+  CREATED
+  PENDING
+  SUCCESS
+  FAILED
+  EXPIRED
+  CANCELLED
+  REFUNDED
+}
+
+enum PaymentTransactionStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+enum CouponType {
+  PERCENT
+  FLAT
+}
+
+enum CmsConfigStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum PageStatus {
+  DRAFT
+  PUBLISHED
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+  WHATSAPP
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+enum BroadcastStatus {
+  DRAFT
+  SCHEDULED
+  SENT
+  CANCELLED
+}
+
+enum PrintJobType {
+  TEST
+  PRACTICE
+  CUSTOM
+}
+
+enum PrintJobStatus {
+  QUEUED
+  RUNNING
+  DONE
+  FAILED
+  CANCELLED
+}
+
+model User {
+  id             String     @id @default(cuid())
+  email          String     @unique
+  phone          String?    @unique
+  passwordHash   String?
+  fullName       String?
+  type           UserType   @default(STUDENT)
+  status         UserStatus @default(ACTIVE)
+  emailVerifiedAt DateTime?
+  phoneVerifiedAt DateTime?
+  lastLoginAt    DateTime?
+  lastActiveAt   DateTime?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  refreshSessions     RefreshSession[]
+  otpCodes            OtpCode[]
+  passwordResetTokens PasswordResetToken[]
+  userRoles           UserRole[]
+  userPermissions     UserPermission[]
+  auditLogs           AuditLog[]         @relation("AuditActor")
+  fileAssets          FileAsset[]
+  createdNotes        Note[]             @relation("NoteCreator")
+  createdQuestions    Question[]         @relation("QuestionCreator")
+  createdTests        Test[]             @relation("TestCreator")
+  noteProgress        NoteProgress[]
+  noteAccessLogs      NoteAccessLog[]
+  noteViewSessions    NoteViewSession[]
+  noteSecurityFlags   NoteSecuritySignal[]
+  noteAccessBans      NoteAccessBan[]
+  attempts            Attempt[]
+  practiceSessions    PracticeSession[]
+  practiceEvents      PracticeQuestionEvent[]
+  questionStates      UserQuestionState[]
+  topicProgress       UserTopicProgress[]
+  subscriptions       Subscription[]
+  entitlements        Entitlement[]
+  paymentOrders       PaymentOrder[]
+  couponRedemptions   CouponRedemption[]
+  notifications       NotificationMessage[]
+  notificationPrefs   NotificationPreference[]
+  broadcasts          Broadcast[]
+  appConfigs          AppConfig[]
+  banners             Banner[]
+  announcements       Announcement[]
+  homeSections        HomeSection[]
+  pages               Page[]
+  printJobs           PrintJob[]
+}
+
+model RefreshSession {
+  id                  String   @id @default(cuid())
+  userId              String
+  hashedToken         String
+  userAgent           String?
+  ip                  String?
+  revokedAt           DateTime?
+  replacedBySessionId String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model OtpCode {
+  id         String     @id @default(cuid())
+  userId     String?
+  identifier String
+  purpose    OtpPurpose
+  codeHash   String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  attempts   Int        @default(0)
+  createdAt  DateTime   @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([identifier, purpose])
+  @@index([userId])
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  userRoles       UserRole[]
+  rolePermissions RolePermission[]
+}
+
+model Permission {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  rolePermissions RolePermission[]
+  userPermissions UserPermission[]
+}
+
+model UserRole {
+  userId     String
+  roleId     String
+  assignedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@index([roleId])
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+}
+
+model UserPermission {
+  userId       String
+  permissionId String
+  allow        Boolean  @default(true)
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([userId, permissionId])
+  @@index([permissionId])
+}
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  actorUserId  String?
+  action       String
+  resourceType String
+  resourceId   String?
+  metaJson     Json?
+  createdAt    DateTime @default(now())
+
+  actorUser User? @relation("AuditActor", fields: [actorUserId], references: [id])
+
+  @@index([actorUserId])
+  @@index([resourceType])
+}
+
+model Subject {
+  id         String   @id @default(cuid())
+  key        String   @unique
+  name       String
+  orderIndex Int      @default(0)
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  topics          Topic[]
+  notes           Note[]
+  questions       Question[]
+  practiceSessions PracticeSession[]
+  tests           Test[]
+
+  @@index([isActive])
+}
+
+model Topic {
+  id         String   @id @default(cuid())
+  subjectId  String
+  parentId   String?
+  name       String
+  orderIndex Int      @default(0)
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  subject  Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  parent   Topic?  @relation("TopicHierarchy", fields: [parentId], references: [id])
+  children Topic[] @relation("TopicHierarchy")
+
+  notes            NoteTopic[]
+  questions        Question[]
+  practiceSessions PracticeSession[]
+  progress         UserTopicProgress[]
+
+  @@index([subjectId])
+  @@index([parentId])
+  @@index([isActive])
+}
+
+model FileAsset {
+  id              String           @id @default(cuid())
+  objectKey       String           @unique
+  fileName        String
+  contentType     String
+  sizeBytes       Int
+  checksum        String?
+  purpose         FileAssetPurpose
+  width           Int?
+  height          Int?
+  createdByUserId String?
+  confirmedAt     DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  createdBy       User?            @relation(fields: [createdByUserId], references: [id])
+  assetReferences AssetReference[]
+  notes           Note[]
+  printJobs       PrintJob[]        @relation("PrintJobOutput")
+
+  @@index([createdByUserId])
+}
+
+model AssetReference {
+  id           String            @id @default(cuid())
+  assetId      String
+  resourceType AssetResourceType
+  resourceId   String
+  createdAt    DateTime          @default(now())
+
+  asset FileAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@index([resourceType, resourceId])
+  @@unique([assetId, resourceType, resourceId])
+}
+
+model Note {
+  id             String   @id @default(cuid())
+  subjectId      String
+  createdByUserId String?
+  title          String
+  description    String?
+  isPremium      Boolean  @default(false)
+  isPublished    Boolean  @default(false)
+  fileAssetId    String?
+  pageCount      Int?
+  searchText     String?  @db.Text
+  searchVector   Unsupported("tsvector")?
+  publishedAt    DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  subject      Subject     @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  createdBy    User?       @relation("NoteCreator", fields: [createdByUserId], references: [id])
+  fileAsset    FileAsset?  @relation(fields: [fileAssetId], references: [id], onDelete: SetNull)
+  topics       NoteTopic[]
+  accessLogs   NoteAccessLog[]
+  viewSessions NoteViewSession[]
+  securityLogs NoteSecuritySignal[]
+  progress     NoteProgress[]
+  accessBans   NoteAccessBan[]
+
+  @@index([subjectId])
+  @@index([isPublished])
+  @@index([title])
+  @@index([searchText])
+  @@index([searchVector], type: Gin)
+}
+
+model NoteTopic {
+  noteId  String
+  topicId String
+
+  note  Note  @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  topic Topic @relation(fields: [topicId], references: [id], onDelete: Cascade)
+
+  @@id([noteId, topicId])
+  @@index([topicId])
+}
+
+model NoteAccessLog {
+  id            String   @id @default(cuid())
+  noteId        String
+  userId        String?
+  viewSessionId String?
+  rangeStart    Int?
+  rangeEnd      Int?
+  bytesSent     Int?
+  ip            String?
+  userAgent     String?
+  createdAt     DateTime @default(now())
+
+  note        Note             @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  user        User?            @relation(fields: [userId], references: [id])
+  viewSession NoteViewSession? @relation(fields: [viewSessionId], references: [id])
+
+  @@index([noteId])
+  @@index([userId])
+}
+
+model NoteViewSession {
+  id            String   @id @default(cuid())
+  noteId        String
+  userId        String
+  tokenHash     String
+  watermarkSeed String
+  ip            String?
+  userAgent     String?
+  expiresAt     DateTime
+  revokedAt     DateTime?
+  lastSeenAt    DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  note       Note             @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessLogs NoteAccessLog[]
+
+  @@index([noteId])
+  @@index([userId])
+}
+
+model NoteSecuritySignal {
+  id         String                 @id @default(cuid())
+  noteId     String
+  userId     String?
+  signalType NoteSecuritySignalType
+  metaJson   Json?
+  createdAt  DateTime               @default(now())
+
+  note Note  @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([noteId])
+  @@index([userId])
+}
+
+model NoteProgress {
+  id                String   @id @default(cuid())
+  noteId            String
+  userId            String
+  lastPage          Int?
+  completionPercent Float?  @default(0)
+  updatedAt         DateTime @updatedAt
+  createdAt         DateTime @default(now())
+
+  note Note @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+    @@unique([noteId, userId])
+    @@index([userId])
+    @@index([updatedAt])
+  }
+
+model NoteAccessBan {
+  id        String   @id @default(cuid())
+  noteId    String
+  userId    String
+  reason    String?
+  createdAt DateTime @default(now())
+  revokedAt DateTime?
+
+  note Note @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([noteId, userId])
+  @@index([userId])
+}
+
+model Question {
+  id                String             @id @default(cuid())
+  subjectId         String
+  topicId           String?
+  createdByUserId   String?
+  type              QuestionType
+  difficulty        QuestionDifficulty @default(MEDIUM)
+  statementJson     Json
+  optionsJson       Json?
+  explanationJson   Json?
+  correctAnswerJson Json?
+  hasMedia          Boolean            @default(false)
+  isPublished       Boolean            @default(false)
+  searchText        String?            @db.Text
+  searchVector      Unsupported("tsvector")?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  subject   Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  topic     Topic?  @relation(fields: [topicId], references: [id])
+  createdBy User?   @relation("QuestionCreator", fields: [createdByUserId], references: [id])
+
+  tests              TestQuestion[]
+  attemptItems       AttemptQuestion[]
+  practiceEvents     PracticeQuestionEvent[]
+  userQuestionStates UserQuestionState[]
+  printItems         PrintJobItem[]
+
+  @@index([subjectId])
+  @@index([topicId])
+  @@index([isPublished])
+  @@index([searchText])
+  @@index([searchVector], type: Gin)
+}
+
+model Test {
+  id             String   @id @default(cuid())
+  subjectId      String?
+  createdByUserId String?
+  title          String
+  description    String?
+  type           TestType
+  configJson     Json
+  isPublished    Boolean  @default(false)
+  startsAt       DateTime?
+  endsAt         DateTime?
+  publishedAt    DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  subject  Subject? @relation(fields: [subjectId], references: [id])
+  createdBy User?   @relation("TestCreator", fields: [createdByUserId], references: [id])
+  questions TestQuestion[]
+  attempts  Attempt[]
+
+  @@index([isPublished])
+  @@index([subjectId])
+}
+
+model TestQuestion {
+  testId     String
+  questionId String
+  orderIndex Int     @default(0)
+  marks      Int?
+
+  test     Test     @relation(fields: [testId], references: [id], onDelete: Cascade)
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@id([testId, questionId])
+  @@index([questionId])
+}
+
+model Attempt {
+  id          String        @id @default(cuid())
+  testId      String
+  userId      String
+  status      AttemptStatus @default(STARTED)
+  startedAt   DateTime      @default(now())
+  submittedAt DateTime?
+  answersJson Json?
+  scoreJson   Json?
+  totalScore  Int?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  test      Test             @relation(fields: [testId], references: [id], onDelete: Cascade)
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  questions AttemptQuestion[]
+  events    AttemptEventLog[]
+
+    @@index([testId])
+    @@index([userId])
+    @@index([status])
+    @@index([createdAt])
+  }
+
+model AttemptQuestion {
+  attemptId  String
+  questionId String
+  orderIndex Int @default(0)
+
+  attempt  Attempt  @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@id([attemptId, questionId])
+  @@index([questionId])
+}
+
+model AttemptEventLog {
+  id        String          @id @default(cuid())
+  attemptId String
+  eventType AttemptEventType
+  metaJson  Json?
+  createdAt DateTime        @default(now())
+
+  attempt Attempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+
+    @@index([attemptId])
+    @@index([eventType, createdAt])
+  }
+
+model PracticeSession {
+  id         String                @id @default(cuid())
+  userId     String
+  subjectId  String?
+  topicId    String?
+  mode       PracticeMode          @default(PRACTICE)
+  configJson Json?
+  status     PracticeSessionStatus @default(ACTIVE)
+  startedAt  DateTime              @default(now())
+  endedAt    DateTime?
+  createdAt  DateTime              @default(now())
+  updatedAt  DateTime              @updatedAt
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subject Subject? @relation(fields: [subjectId], references: [id])
+  topic   Topic?  @relation(fields: [topicId], references: [id])
+
+  events PracticeQuestionEvent[]
+
+  @@index([userId])
+  @@index([subjectId])
+  @@index([topicId])
+}
+
+model PracticeQuestionEvent {
+  id          String           @id @default(cuid())
+  sessionId   String
+  userId      String
+  questionId  String
+  eventType   PracticeEventType
+  isCorrect   Boolean?
+  payloadJson Json?
+  createdAt   DateTime         @default(now())
+
+  session  PracticeSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user     User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  question Question        @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+    @@index([sessionId])
+    @@index([userId])
+    @@index([questionId])
+    @@index([eventType, createdAt])
+  }
+
+model UserQuestionState {
+  userId         String
+  questionId     String
+  correctCount   Int      @default(0)
+  wrongCount     Int      @default(0)
+  lastAnsweredAt DateTime?
+  lastIsCorrect  Boolean?
+  updatedAt      DateTime @updatedAt
+  createdAt      DateTime @default(now())
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@id([userId, questionId])
+  @@index([questionId])
+}
+
+model UserTopicProgress {
+  userId            String
+  topicId           String
+  totalAnswered     Int      @default(0)
+  correctCount      Int      @default(0)
+  completionPercent Float?   @default(0)
+  updatedAt         DateTime @updatedAt
+  createdAt         DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topic Topic @relation(fields: [topicId], references: [id], onDelete: Cascade)
+
+  @@id([userId, topicId])
+  @@index([topicId])
+}
+
+model Plan {
+  id           String   @id @default(cuid())
+  key          String   @unique
+  name         String
+  tier         String?
+  pricePaise   Int
+  durationDays Int
+  isActive     Boolean  @default(true)
+  metadataJson Json?
+  featuresJson Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  subscriptions Subscription[]
+  orders         PaymentOrder[]
+}
+
+model Subscription {
+  id             String             @id @default(cuid())
+  userId         String
+  planId         String
+  status         SubscriptionStatus @default(PENDING)
+  startsAt       DateTime?
+  endsAt         DateTime?
+  paymentOrderId String?            @unique
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan Plan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  paymentOrder PaymentOrder? @relation("SubscriptionOrder", fields: [paymentOrderId], references: [id])
+  entitlements Entitlement[]
+
+  @@index([userId])
+  @@index([planId])
+}
+
+model Entitlement {
+  id             String           @id @default(cuid())
+  userId         String
+  kind           EntitlementKind
+  scopeJson      Json?
+  reason         String?
+  revokedReason  String?
+  startsAt       DateTime?
+  endsAt         DateTime?
+  subscriptionId String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id])
+
+  @@index([userId])
+  @@index([subscriptionId])
+}
+
+model PaymentOrder {
+  id                     String              @id @default(cuid())
+  userId                 String
+  planId                 String?
+  couponId               String?
+  merchantTransactionId  String              @unique
+  merchantUserId         String?
+  provider               PaymentProvider     @default(PHONEPE)
+  currency               String              @default("INR")
+  amountPaise            Int
+  finalAmountPaise       Int
+  status                 PaymentOrderStatus  @default(CREATED)
+  idempotencyKey         String?
+  expiresAt              DateTime?
+  metadataJson           Json?
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+  completedAt            DateTime?
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan         Plan?         @relation(fields: [planId], references: [id])
+  coupon       Coupon?       @relation(fields: [couponId], references: [id])
+  subscription Subscription? @relation("SubscriptionOrder")
+
+  transactions      PaymentTransaction[]
+  events            PaymentEvent[]
+  couponRedemptions CouponRedemption[]
+
+    @@index([userId])
+    @@index([planId])
+    @@index([status])
+    @@index([status, completedAt])
+  }
+
+model PaymentTransaction {
+  id                    String                   @id @default(cuid())
+  orderId               String
+  providerTransactionId String?                  @unique
+  status                PaymentTransactionStatus @default(PENDING)
+  rawResponseJson       Json?
+  createdAt             DateTime                 @default(now())
+
+  order PaymentOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+}
+
+model PaymentEvent {
+  id              String   @id @default(cuid())
+  orderId         String
+  providerEventId String?
+  eventType       String
+  payloadJson     Json?
+  processedAt     DateTime?
+  createdAt       DateTime @default(now())
+
+  order PaymentOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([providerEventId])
+  @@index([eventType])
+}
+
+model Coupon {
+  id                    String     @id @default(cuid())
+  code                  String     @unique
+  type                  CouponType
+  value                 Int
+  maxRedemptions        Int?
+  maxRedemptionsPerUser Int?
+  minAmountPaise        Int?
+  startsAt              DateTime?
+  endsAt                DateTime?
+  isActive              Boolean    @default(true)
+  metadataJson          Json?
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+
+  redemptions CouponRedemption[]
+  orders      PaymentOrder[]
+}
+
+model CouponRedemption {
+  id         String   @id @default(cuid())
+  couponId   String
+  userId     String
+  orderId    String?
+  redeemedAt DateTime @default(now())
+
+  coupon Coupon       @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  user   User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  order  PaymentOrder? @relation(fields: [orderId], references: [id])
+
+  @@index([couponId])
+  @@index([userId])
+  @@index([orderId])
+}
+
+model AppConfig {
+  id             String          @id @default(cuid())
+  key            String
+  version        Int
+  status         CmsConfigStatus @default(DRAFT)
+  configJson     Json
+  createdByUserId String?
+  createdAt      DateTime        @default(now())
+  publishedAt    DateTime?
+
+  createdBy User? @relation(fields: [createdByUserId], references: [id])
+
+  @@unique([key, version])
+  @@index([key, status])
+}
+
+model Banner {
+  id             String   @id @default(cuid())
+  title          String
+  bodyJson       Json?
+  linkUrl        String?
+  target         String?
+  priority       Int      @default(0)
+  startsAt       DateTime?
+  endsAt         DateTime?
+  isActive       Boolean  @default(true)
+  createdByUserId String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  createdBy User? @relation(fields: [createdByUserId], references: [id])
+
+  @@index([isActive])
+  @@index([startsAt])
+  @@index([endsAt])
+}
+
+model Announcement {
+  id             String   @id @default(cuid())
+  title          String
+  bodyJson       Json
+  pinned         Boolean  @default(false)
+  startsAt       DateTime?
+  endsAt         DateTime?
+  isActive       Boolean  @default(true)
+  createdByUserId String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  createdBy User? @relation(fields: [createdByUserId], references: [id])
+
+  @@index([isActive])
+  @@index([startsAt])
+  @@index([endsAt])
+}
+
+model HomeSection {
+  id             String   @id @default(cuid())
+  type           String
+  configJson     Json
+  orderIndex     Int      @default(0)
+  isActive       Boolean  @default(true)
+  createdByUserId String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  createdBy User? @relation(fields: [createdByUserId], references: [id])
+
+  @@index([isActive])
+}
+
+model Page {
+  id             String     @id @default(cuid())
+  slug           String     @unique
+  title          String
+  bodyJson       Json
+  status         PageStatus @default(DRAFT)
+  publishedAt    DateTime?
+  createdByUserId String?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  createdBy User? @relation(fields: [createdByUserId], references: [id])
+
+  @@index([status])
+}
+
+model NotificationTemplate {
+  id            String              @id @default(cuid())
+  key           String              @unique
+  channel       NotificationChannel
+  subject       String?
+  bodyJson      Json
+  variablesJson Json?
+  isActive      Boolean             @default(true)
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  messages   NotificationMessage[]
+  broadcasts Broadcast[]
+}
+
+model NotificationMessage {
+  id           String              @id @default(cuid())
+  templateId   String?
+  userId       String?
+  channel      NotificationChannel
+  payloadJson  Json?
+  renderedText String?
+  renderedHtml String?
+  status       NotificationStatus @default(PENDING)
+  attempts     Int                @default(0)
+  lastError    String?
+  createdAt    DateTime           @default(now())
+  sentAt       DateTime?
+
+  template NotificationTemplate? @relation(fields: [templateId], references: [id])
+  user     User?                 @relation(fields: [userId], references: [id])
+
+  @@index([status])
+  @@index([userId])
+}
+
+model NotificationPreference {
+  id        String              @id @default(cuid())
+  userId    String
+  channel   NotificationChannel
+  isEnabled Boolean             @default(true)
+  updatedAt DateTime            @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, channel])
+}
+
+model Broadcast {
+  id             String          @id @default(cuid())
+  title          String
+  channel        NotificationChannel
+  status         BroadcastStatus @default(DRAFT)
+  audienceJson   Json
+  templateId     String?
+  scheduledAt    DateTime?
+  sentAt         DateTime?
+  createdByUserId String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  template NotificationTemplate? @relation(fields: [templateId], references: [id])
+  creator  User?                 @relation(fields: [createdByUserId], references: [id])
+
+  @@index([status])
+}
+
+model DailyStat {
+  id             String   @id @default(cuid())
+  date           DateTime
+  metricKey      String
+  dimensionKey   String?
+  dimensionValue String?
+  valueInt       Int?
+  valueFloat     Float?
+  metaJson       Json?
+  createdAt      DateTime @default(now())
+
+  @@unique([date, metricKey, dimensionKey, dimensionValue])
+  @@index([metricKey])
+}
+
+model PrintJob {
+  id                String         @id @default(cuid())
+  type              PrintJobType
+  configJson        Json
+  status            PrintJobStatus @default(QUEUED)
+  outputFileAssetId String?
+  errorMessage      String?
+  createdByUserId   String?
+  startedAt         DateTime?
+  completedAt       DateTime?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  items      PrintJobItem[]
+  outputFile FileAsset? @relation("PrintJobOutput", fields: [outputFileAssetId], references: [id])
+  creator    User?      @relation(fields: [createdByUserId], references: [id])
+
+  @@index([status])
+}
+
+model PrintJobItem {
+  id         String   @id @default(cuid())
+  jobId      String
+  questionId String
+  orderIndex Int      @default(0)
+  metaJson   Json?
+
+  job      PrintJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+}
