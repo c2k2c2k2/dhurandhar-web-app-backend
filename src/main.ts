@@ -2,7 +2,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import { json, urlencoded } from 'express';
+import { json, Request, text, urlencoded } from 'express';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { AuditLogInterceptor } from './common/interceptors/audit-log.interceptor';
 import { StructuredLoggerInterceptor } from './common/interceptors/structured-logger.interceptor';
@@ -20,7 +20,28 @@ async function bootstrap() {
   let isShuttingDown = false;
 
   const bodySizeLimit = configService.get<string>('BODY_SIZE_LIMIT') ?? '5mb';
-  app.use(json({ limit: bodySizeLimit }));
+  app.use(
+    '/payments/webhook/phonepe',
+    text({
+      type: '*/*',
+      limit: bodySizeLimit,
+      verify: (req: Request & { rawBody?: string }, _res, buf) => {
+        if (buf?.length) {
+          req.rawBody = buf.toString('utf8');
+        }
+      },
+    }),
+  );
+  app.use(
+    json({
+      limit: bodySizeLimit,
+      verify: (req: Request & { rawBody?: string }, _res, buf) => {
+        if (buf?.length) {
+          req.rawBody = buf.toString('utf8');
+        }
+      },
+    }),
+  );
   app.use(urlencoded({ extended: true, limit: bodySizeLimit }));
 
   app.useGlobalPipes(

@@ -1,9 +1,19 @@
-import { BadRequestException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { CouponType, PaymentOrderStatus, PaymentTransactionStatus, Prisma } from '@prisma/client';
+import {
+  CouponType,
+  PaymentOrderStatus,
+  PaymentTransactionStatus,
+  Prisma,
+} from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../../infra/prisma/prisma.service';
-import { CheckoutDto, PaymentOrderQueryDto } from './dto';
+import { CheckoutDto, PaymentOrderQueryDto, PaymentRefundDto } from './dto';
 import { PhonepeService } from './phonepe/phonepe.service';
 import { SubscriptionsService } from './subscriptions.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -26,7 +36,11 @@ export class PaymentsService {
     private readonly notificationsService: NotificationsService,
   ) {}
 
-  async checkout(userId: string | undefined, dto: CheckoutDto, idempotencyKey?: string) {
+  async checkout(
+    userId: string | undefined,
+    dto: CheckoutDto,
+    idempotencyKey?: string,
+  ) {
     if (!userId) {
       throw new UnauthorizedException({
         code: 'AUTH_UNAUTHORIZED',
@@ -34,7 +48,9 @@ export class PaymentsService {
       });
     }
 
-    const plan = await this.prisma.plan.findUnique({ where: { id: dto.planId } });
+    const plan = await this.prisma.plan.findUnique({
+      where: { id: dto.planId },
+    });
     if (!plan || !plan.isActive) {
       throw new NotFoundException({
         code: 'PLAN_NOT_FOUND',
@@ -43,7 +59,8 @@ export class PaymentsService {
     }
 
     const now = new Date();
-    const expiresMinutes = this.configService.get<number>('PENDING_ORDER_EXPIRE_MINUTES') ?? 30;
+    const expiresMinutes =
+      this.configService.get<number>('PENDING_ORDER_EXPIRE_MINUTES') ?? 30;
     const expiresAt = new Date(now.getTime() + expiresMinutes * 60 * 1000);
 
     if (idempotencyKey) {
@@ -51,12 +68,16 @@ export class PaymentsService {
         where: {
           userId,
           idempotencyKey,
-          status: { in: [PaymentOrderStatus.CREATED, PaymentOrderStatus.PENDING] },
+          status: {
+            in: [PaymentOrderStatus.CREATED, PaymentOrderStatus.PENDING],
+          },
           expiresAt: { gt: now },
         },
       });
       if (existing) {
-        const metadata = (existing.metadataJson ?? {}) as { redirectUrl?: string };
+        const metadata = (existing.metadataJson ?? {}) as {
+          redirectUrl?: string;
+        };
         if (metadata.redirectUrl) {
           return {
             redirectUrl: metadata.redirectUrl,
@@ -72,14 +93,18 @@ export class PaymentsService {
       where: {
         userId,
         planId: plan.id,
-        status: { in: [PaymentOrderStatus.CREATED, PaymentOrderStatus.PENDING] },
+        status: {
+          in: [PaymentOrderStatus.CREATED, PaymentOrderStatus.PENDING],
+        },
         expiresAt: { gt: now },
       },
       orderBy: { createdAt: 'desc' },
     });
 
     if (reusable) {
-      const metadata = (reusable.metadataJson ?? {}) as { redirectUrl?: string };
+      const metadata = (reusable.metadataJson ?? {}) as {
+        redirectUrl?: string;
+      };
       if (metadata.redirectUrl) {
         return {
           redirectUrl: metadata.redirectUrl,
@@ -116,34 +141,33 @@ export class PaymentsService {
     });
 
     const redirectUrl = this.configService.get<string>('PHONEPE_REDIRECT_URL');
-    const callbackUrl = this.configService.get<string>('PHONEPE_CALLBACK_URL');
-    if (!redirectUrl || !callbackUrl) {
+    if (!redirectUrl) {
       throw new BadRequestException({
         code: 'PHONEPE_CONFIG_MISSING',
-        message: 'PhonePe redirect/callback URL missing.',
+        message: 'PhonePe redirect URL missing.',
       });
     }
 
-    const merchantId = this.configService.get<string>('PHONEPE_MERCHANT_ID');
-    if (!merchantId) {
-      throw new BadRequestException({
-        code: 'PHONEPE_CONFIG_MISSING',
-        message: 'PHONEPE_MERCHANT_ID is missing.',
-      });
-    }
+    const paymentMessage = this.configService.get<string>(
+      'PHONEPE_PAYMENT_MESSAGE',
+    );
+    const disablePaymentRetry =
+      this.configService.get<boolean>('PHONEPE_DISABLE_PAYMENT_RETRY') ?? false;
 
     const payload = {
-      merchantId,
-      merchantTransactionId: order.merchantTransactionId,
-      merchantUserId: order.merchantUserId,
+      merchantOrderId: order.merchantTransactionId,
       amount: order.finalAmountPaise,
-      redirectUrl,
-      redirectMode: 'REDIRECT',
-      callbackUrl,
-      paymentInstrument: { type: 'PAY_PAGE' },
+      redirectUrl: this.buildRedirectUrl(
+        redirectUrl,
+        order.merchantTransactionId,
+      ),
+      message: paymentMessage,
+      expireAfterSeconds: expiresMinutes * 60,
+      disablePaymentRetry,
     };
 
-    const { redirectUrl: payUrl } = await this.phonepeService.initiatePayment(payload);
+    const { redirectUrl: payUrl } =
+      await this.phonepeService.initiatePayment(payload);
 
     await this.prisma.paymentOrder.update({
       where: { id: order.id },
@@ -164,7 +188,10 @@ export class PaymentsService {
     };
   }
 
-  async getOrderStatus(userId: string | undefined, merchantTransactionId: string) {
+  async getOrderStatus(
+    userId: string | undefined,
+    merchantTransactionId: string,
+  ) {
     if (!userId) {
       throw new UnauthorizedException({
         code: 'AUTH_UNAUTHORIZED',
@@ -183,7 +210,10 @@ export class PaymentsService {
       });
     }
 
-    const updated = await this.refreshOrderStatus(order.id, order.merchantTransactionId);
+    const updated = await this.refreshOrderStatus(
+      order.id,
+      order.merchantTransactionId,
+    );
     return updated;
   }
 
@@ -222,7 +252,9 @@ export class PaymentsService {
   }
 
   async manualFinalize(orderId: string) {
-    const order = await this.prisma.paymentOrder.findUnique({ where: { id: orderId } });
+    const order = await this.prisma.paymentOrder.findUnique({
+      where: { id: orderId },
+    });
     if (!order) {
       throw new NotFoundException({
         code: 'PAYMENT_ORDER_NOT_FOUND',
@@ -233,15 +265,183 @@ export class PaymentsService {
     return this.refreshOrderStatus(order.id, order.merchantTransactionId);
   }
 
-  async handleWebhook(payload: Record<string, unknown>, authHeader?: string) {
-    this.validateWebhookAuth(authHeader);
-
-    const merchantTransactionId = this.extractMerchantTransactionId(payload);
-    if (!merchantTransactionId) {
-      throw new BadRequestException({
-        code: 'PHONEPE_WEBHOOK_INVALID',
-        message: 'merchantTransactionId missing.',
+  async refundOrder(orderId: string, dto: PaymentRefundDto) {
+    const order = await this.prisma.paymentOrder.findUnique({
+      where: { id: orderId },
+    });
+    if (!order) {
+      throw new NotFoundException({
+        code: 'PAYMENT_ORDER_NOT_FOUND',
+        message: 'Payment order not found.',
       });
+    }
+
+    if (
+      order.status !== PaymentOrderStatus.SUCCESS &&
+      order.status !== PaymentOrderStatus.REFUNDED
+    ) {
+      throw new BadRequestException({
+        code: 'PAYMENT_ORDER_NOT_REFUNDABLE',
+        message: 'Only successful orders can be refunded.',
+      });
+    }
+
+    const merchantRefundId = dto.merchantRefundId?.trim() || randomUUID();
+    const existingRefund = await this.prisma.paymentEvent.findFirst({
+      where: {
+        providerEventId: merchantRefundId,
+        eventType: 'PHONEPE_REFUND_INITIATED',
+      },
+    });
+
+    if (existingRefund && existingRefund.orderId !== order.id) {
+      throw new BadRequestException({
+        code: 'PAYMENT_REFUND_ID_CONFLICT',
+        message: 'merchantRefundId already exists for another order.',
+      });
+    }
+
+    if (existingRefund) {
+      return this.getRefundStatusByMerchantRefundId(merchantRefundId);
+    }
+
+    const refundedAmountPaise = await this.getSuccessfulRefundedAmountPaise(
+      order.id,
+    );
+    const remainingRefundablePaise = Math.max(
+      0,
+      order.finalAmountPaise - refundedAmountPaise,
+    );
+
+    if (remainingRefundablePaise <= 0) {
+      throw new BadRequestException({
+        code: 'PAYMENT_ALREADY_REFUNDED',
+        message: 'Order amount is already fully refunded.',
+      });
+    }
+
+    const amountPaise = dto.amountPaise ?? remainingRefundablePaise;
+    if (amountPaise <= 0) {
+      throw new BadRequestException({
+        code: 'PAYMENT_REFUND_INVALID_AMOUNT',
+        message: 'Refund amount must be greater than zero.',
+      });
+    }
+    if (amountPaise > remainingRefundablePaise) {
+      throw new BadRequestException({
+        code: 'PAYMENT_REFUND_AMOUNT_EXCEEDS_LIMIT',
+        message: 'Refund amount exceeds remaining refundable amount.',
+      });
+    }
+
+    const response = await this.phonepeService.refund({
+      merchantRefundId,
+      originalMerchantOrderId: order.merchantTransactionId,
+      amount: amountPaise,
+    });
+
+    await this.prisma.paymentEvent.create({
+      data: {
+        orderId: order.id,
+        providerEventId: merchantRefundId,
+        eventType: 'PHONEPE_REFUND_INITIATED',
+        payloadJson: this.toJsonValue({
+          merchantRefundId,
+          originalMerchantOrderId: order.merchantTransactionId,
+          amountPaise,
+          reason: dto.reason,
+          providerRefundId: response.refundId,
+          state: response.state,
+          response,
+        }),
+        processedAt: new Date(),
+      },
+    });
+
+    let refundStatus:
+      | Awaited<ReturnType<PhonepeService['getRefundStatus']>>
+      | undefined;
+    try {
+      refundStatus = await this.refreshRefundStatus(order.id, merchantRefundId);
+    } catch (error) {
+      void error;
+    }
+
+    const updatedOrder = await this.prisma.paymentOrder.findUnique({
+      where: { id: order.id },
+    });
+
+    return {
+      orderId: order.id,
+      merchantRefundId,
+      providerRefundId: response.refundId,
+      requestedAmountPaise: amountPaise,
+      state: refundStatus?.state ?? response.state,
+      refundStatus,
+      orderStatus: updatedOrder?.status ?? order.status,
+    };
+  }
+
+  async getRefundStatusByMerchantRefundId(merchantRefundId: string) {
+    const initiatedRefund = await this.prisma.paymentEvent.findFirst({
+      where: {
+        providerEventId: merchantRefundId,
+        eventType: 'PHONEPE_REFUND_INITIATED',
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (!initiatedRefund) {
+      throw new NotFoundException({
+        code: 'PAYMENT_REFUND_NOT_FOUND',
+        message: 'Payment refund not found.',
+      });
+    }
+
+    const response = await this.refreshRefundStatus(
+      initiatedRefund.orderId,
+      merchantRefundId,
+    );
+    const order = await this.prisma.paymentOrder.findUnique({
+      where: { id: initiatedRefund.orderId },
+    });
+
+    return {
+      orderId: initiatedRefund.orderId,
+      merchantRefundId,
+      state: response.state,
+      amountPaise: response.amount,
+      originalMerchantOrderId: response.originalMerchantOrderId,
+      paymentDetails: response.paymentDetails,
+      orderStatus: order?.status,
+    };
+  }
+
+  async handleWebhook(payload: unknown, authHeader?: string, rawBody?: string) {
+    const normalizedPayload = this.normalizeWebhookPayload(payload, rawBody);
+    const verified = this.phonepeService.validateWebhookSignature(
+      authHeader,
+      rawBody,
+    );
+    const verifiedPayload = verified?.payload as
+      | {
+          merchantOrderId?: string;
+          originalMerchantOrderId?: string;
+          orderId?: string;
+          paymentDetails?: Array<{ transactionId?: string }>;
+        }
+      | undefined;
+
+    const merchantTransactionId = this.extractMerchantTransactionId(
+      normalizedPayload,
+      verifiedPayload,
+    );
+    if (!merchantTransactionId) {
+      return {
+        success: true,
+        acknowledged: true,
+        reason: 'NO_MERCHANT_ORDER_ID',
+      };
     }
 
     const orderRecord = await this.prisma.paymentOrder.findUnique({
@@ -255,14 +455,21 @@ export class PaymentsService {
     }
 
     const providerEventId =
-      (payload as { eventId?: string }).eventId ??
-      (payload as { transactionId?: string }).transactionId ??
-      (payload as { payload?: { transactionId?: string } }).payload?.transactionId ??
+      verifiedPayload?.paymentDetails?.[0]?.transactionId ??
+      verifiedPayload?.orderId ??
+      (normalizedPayload as { eventId?: string }).eventId ??
+      (normalizedPayload as { transactionId?: string }).transactionId ??
+      (normalizedPayload as { payload?: { transactionId?: string } }).payload
+        ?.transactionId ??
       merchantTransactionId;
 
     const existingEvent = providerEventId
       ? await this.prisma.paymentEvent.findFirst({
-          where: { providerEventId, eventType: 'PHONEPE_WEBHOOK', orderId: orderRecord.id },
+          where: {
+            providerEventId,
+            eventType: 'PHONEPE_WEBHOOK',
+            orderId: orderRecord.id,
+          },
         })
       : null;
 
@@ -272,12 +479,15 @@ export class PaymentsService {
           orderId: orderRecord.id,
           providerEventId,
           eventType: 'PHONEPE_WEBHOOK',
-          payloadJson: payload as Prisma.InputJsonValue,
+          payloadJson: this.toJsonValue(normalizedPayload),
         },
       });
     }
 
-    const order = await this.refreshOrderStatus(orderRecord.id, merchantTransactionId);
+    const order = await this.refreshOrderStatus(
+      orderRecord.id,
+      merchantTransactionId,
+    );
 
     if (providerEventId) {
       await this.prisma.paymentEvent.updateMany({
@@ -298,7 +508,9 @@ export class PaymentsService {
     const now = new Date();
     const result = await this.prisma.paymentOrder.updateMany({
       where: {
-        status: { in: [PaymentOrderStatus.CREATED, PaymentOrderStatus.PENDING] },
+        status: {
+          in: [PaymentOrderStatus.CREATED, PaymentOrderStatus.PENDING],
+        },
         expiresAt: { lte: now },
       },
       data: {
@@ -314,7 +526,9 @@ export class PaymentsService {
     const now = new Date();
     const orders = await this.prisma.paymentOrder.findMany({
       where: {
-        status: { in: [PaymentOrderStatus.CREATED, PaymentOrderStatus.PENDING] },
+        status: {
+          in: [PaymentOrderStatus.CREATED, PaymentOrderStatus.PENDING],
+        },
         expiresAt: { gt: now },
       },
       orderBy: { createdAt: 'asc' },
@@ -346,7 +560,10 @@ export class PaymentsService {
     return this.refreshOrderStatus(order.id, merchantTransactionId);
   }
 
-  private async refreshOrderStatus(orderId: string, merchantTransactionId: string) {
+  private async refreshOrderStatus(
+    orderId: string,
+    merchantTransactionId: string,
+  ) {
     const order = await this.prisma.paymentOrder.findUnique({
       where: { id: orderId },
       include: { subscription: true },
@@ -362,9 +579,14 @@ export class PaymentsService {
       return order;
     }
 
-    const statusResponse = await this.phonepeService.checkStatus(merchantTransactionId);
+    const statusResponse = await this.phonepeService.checkStatus(
+      merchantTransactionId,
+    );
     const normalized = this.normalizeStatus(statusResponse);
-    const nextStatus = this.applyTransition(order.status, normalized.orderStatus);
+    const nextStatus = this.applyTransition(
+      order.status,
+      normalized.orderStatus,
+    );
 
     const updated = await this.prisma.paymentOrder.update({
       where: { id: order.id },
@@ -375,7 +597,8 @@ export class PaymentsService {
           nextStatus === PaymentOrderStatus.SUCCESS ||
           nextStatus === PaymentOrderStatus.FAILED ||
           nextStatus === PaymentOrderStatus.EXPIRED ||
-          nextStatus === PaymentOrderStatus.CANCELLED
+          nextStatus === PaymentOrderStatus.CANCELLED ||
+          nextStatus === PaymentOrderStatus.REFUNDED
             ? new Date()
             : undefined,
       },
@@ -401,13 +624,18 @@ export class PaymentsService {
     }
 
     let activatedSubscription = updated.subscription;
-    if (nextStatus === PaymentOrderStatus.SUCCESS && !updated.subscription && updated.planId) {
+    if (
+      nextStatus === PaymentOrderStatus.SUCCESS &&
+      !updated.subscription &&
+      updated.planId
+    ) {
       try {
-        activatedSubscription = await this.subscriptionsService.activateSubscription(
-          updated.userId,
-          updated.planId,
-          updated.id,
-        );
+        activatedSubscription =
+          await this.subscriptionsService.activateSubscription(
+            updated.userId,
+            updated.planId,
+            updated.id,
+          );
       } catch (error) {
         // Let the caller retry via status endpoint or webhook; don't mask payment status.
         void error;
@@ -437,15 +665,24 @@ export class PaymentsService {
   }
 
   private normalizeStatus(response: {
-    code?: string;
-    data?: { state?: string; status?: string; responseCode?: string; transactionId?: string; amount?: number };
+    state?: string;
+    amount?: number;
+    payableAmount?: number;
+    paymentDetails?: Array<{
+      transactionId?: string;
+      state?: string;
+      amount?: number;
+      timestamp?: number;
+    }>;
+    errorCode?: string;
+    detailedErrorCode?: string;
   }) {
+    const latestAttempt = [...(response.paymentDetails ?? [])].sort(
+      (a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0),
+    )[0];
+
     const rawState =
-      response.data?.state ??
-      response.data?.status ??
-      response.data?.responseCode ??
-      response.code ??
-      '';
+      latestAttempt?.state ?? response.state ?? response.errorCode ?? '';
     const state = rawState.toUpperCase();
 
     let orderStatus: PaymentOrderStatus = PaymentOrderStatus.PENDING;
@@ -457,6 +694,8 @@ export class PaymentsService {
       orderStatus = PaymentOrderStatus.EXPIRED;
     } else if (['CANCELLED', 'USER_CANCELLED'].includes(state)) {
       orderStatus = PaymentOrderStatus.CANCELLED;
+    } else if (['REFUNDED', 'REFUND_SUCCESS'].includes(state)) {
+      orderStatus = PaymentOrderStatus.REFUNDED;
     }
 
     const transactionStatus =
@@ -471,12 +710,16 @@ export class PaymentsService {
     return {
       orderStatus,
       transactionStatus,
-      providerTransactionId: response.data?.transactionId,
-      amountPaise: response.data?.amount,
+      providerTransactionId: latestAttempt?.transactionId,
+      amountPaise:
+        latestAttempt?.amount ?? response.payableAmount ?? response.amount,
     };
   }
 
-  private applyTransition(current: PaymentOrderStatus, next: PaymentOrderStatus) {
+  private applyTransition(
+    current: PaymentOrderStatus,
+    next: PaymentOrderStatus,
+  ) {
     if (current === next) {
       return current;
     }
@@ -494,8 +737,9 @@ export class PaymentsService {
         PaymentOrderStatus.FAILED,
         PaymentOrderStatus.EXPIRED,
         PaymentOrderStatus.CANCELLED,
+        PaymentOrderStatus.REFUNDED,
       ],
-      SUCCESS: [],
+      SUCCESS: [PaymentOrderStatus.REFUNDED],
       FAILED: [],
       EXPIRED: [],
       CANCELLED: [],
@@ -511,7 +755,10 @@ export class PaymentsService {
 
   private async upsertTransaction(
     orderId: string,
-    normalized: { transactionStatus: PaymentTransactionStatus; providerTransactionId?: string },
+    normalized: {
+      transactionStatus: PaymentTransactionStatus;
+      providerTransactionId?: string;
+    },
     rawResponse: unknown,
   ) {
     if (normalized.providerTransactionId) {
@@ -540,48 +787,258 @@ export class PaymentsService {
     });
   }
 
-  private validateWebhookAuth(authHeader?: string) {
-    const username = this.configService.get<string>('PHONEPE_WEBHOOK_BASIC_USER');
-    const password = this.configService.get<string>('PHONEPE_WEBHOOK_BASIC_PASS');
-    if (!username && !password) {
-      return;
+  private async refreshRefundStatus(orderId: string, merchantRefundId: string) {
+    const response =
+      await this.phonepeService.getRefundStatus(merchantRefundId);
+
+    await this.prisma.paymentEvent.create({
+      data: {
+        orderId,
+        providerEventId: merchantRefundId,
+        eventType: 'PHONEPE_REFUND_STATUS',
+        payloadJson: this.toJsonValue({
+          merchantRefundId,
+          merchantId: response.merchantId,
+          originalMerchantOrderId: response.originalMerchantOrderId,
+          amount: response.amount,
+          state: response.state,
+          paymentDetails: response.paymentDetails,
+        }),
+        processedAt: this.isRefundTerminalState(response.state)
+          ? new Date()
+          : null,
+      },
+    });
+
+    if (this.isRefundSuccessState(response.state)) {
+      await this.applyRefundStatusToOrder(orderId);
     }
-    if (!authHeader || !authHeader.startsWith('Basic ')) {
-      throw new UnauthorizedException({
-        code: 'PHONEPE_WEBHOOK_UNAUTHORIZED',
-        message: 'Unauthorized webhook.',
-      });
-    }
-    const encoded = authHeader.slice('Basic '.length);
-    const decoded = Buffer.from(encoded, 'base64').toString('utf8');
-    const [user, pass] = decoded.split(':');
-    if (user !== username || pass !== password) {
-      throw new UnauthorizedException({
-        code: 'PHONEPE_WEBHOOK_UNAUTHORIZED',
-        message: 'Unauthorized webhook.',
-      });
-    }
+
+    return response;
   }
 
-  private extractMerchantTransactionId(payload: Record<string, unknown>) {
+  private extractMerchantTransactionId(
+    payload: Record<string, unknown>,
+    verifiedPayload?: {
+      merchantOrderId?: string;
+      originalMerchantOrderId?: string;
+    },
+  ) {
+    const callbackMerchantOrderId = verifiedPayload?.merchantOrderId;
+    if (typeof callbackMerchantOrderId === 'string') {
+      return callbackMerchantOrderId;
+    }
+    const callbackOriginalMerchantOrderId =
+      verifiedPayload?.originalMerchantOrderId;
+    if (typeof callbackOriginalMerchantOrderId === 'string') {
+      return callbackOriginalMerchantOrderId;
+    }
+
+    const merchantOrderId = payload.merchantOrderId;
+    if (typeof merchantOrderId === 'string') {
+      return merchantOrderId;
+    }
+    const originalMerchantOrderId = payload.originalMerchantOrderId;
+    if (typeof originalMerchantOrderId === 'string') {
+      return originalMerchantOrderId;
+    }
+
     const direct = payload.merchantTransactionId;
     if (typeof direct === 'string') {
       return direct;
     }
-    const nested = (payload as { data?: { merchantTransactionId?: string } }).data
-      ?.merchantTransactionId;
+    const callbackPayloadOrderId = (
+      payload as { payload?: { merchantOrderId?: string } }
+    ).payload?.merchantOrderId;
+    if (typeof callbackPayloadOrderId === 'string') {
+      return callbackPayloadOrderId;
+    }
+    const nested = (payload as { data?: { merchantTransactionId?: string } })
+      .data?.merchantTransactionId;
     if (typeof nested === 'string') {
       return nested;
     }
-    const payloadNested = (payload as { payload?: { merchantTransactionId?: string } }).payload
-      ?.merchantTransactionId;
+    const nestedMerchantOrderId = (
+      payload as { data?: { merchantOrderId?: string } }
+    ).data?.merchantOrderId;
+    if (typeof nestedMerchantOrderId === 'string') {
+      return nestedMerchantOrderId;
+    }
+    const nestedOriginalMerchantOrderId = (
+      payload as { data?: { originalMerchantOrderId?: string } }
+    ).data?.originalMerchantOrderId;
+    if (typeof nestedOriginalMerchantOrderId === 'string') {
+      return nestedOriginalMerchantOrderId;
+    }
+    const payloadNested = (
+      payload as { payload?: { merchantTransactionId?: string } }
+    ).payload?.merchantTransactionId;
     if (typeof payloadNested === 'string') {
       return payloadNested;
+    }
+    const payloadNestedMerchantOrderId = (
+      payload as { payload?: { merchantOrderId?: string } }
+    ).payload?.merchantOrderId;
+    if (typeof payloadNestedMerchantOrderId === 'string') {
+      return payloadNestedMerchantOrderId;
+    }
+    const payloadNestedOriginalMerchantOrderId = (
+      payload as { payload?: { originalMerchantOrderId?: string } }
+    ).payload?.originalMerchantOrderId;
+    if (typeof payloadNestedOriginalMerchantOrderId === 'string') {
+      return payloadNestedOriginalMerchantOrderId;
     }
     return undefined;
   }
 
-  private async resolveCoupon(userId: string, code: string, amountPaise: number) {
+  private normalizeWebhookPayload(payload: unknown, rawBody?: string) {
+    if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+      return payload as Record<string, unknown>;
+    }
+
+    const parseText = (input: string) => {
+      const trimmed = input.trim();
+      if (!trimmed) {
+        return {};
+      }
+      try {
+        const parsed = JSON.parse(trimmed) as unknown;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return parsed as Record<string, unknown>;
+        }
+        return { raw: parsed };
+      } catch {
+        return { raw: trimmed };
+      }
+    };
+
+    if (typeof payload === 'string') {
+      return parseText(payload);
+    }
+
+    if (typeof rawBody === 'string') {
+      return parseText(rawBody);
+    }
+
+    return {};
+  }
+
+  private buildRedirectUrl(
+    baseRedirectUrl: string,
+    merchantTransactionId: string,
+  ) {
+    const url = new URL(baseRedirectUrl);
+    if (!url.searchParams.has('merchantTransactionId')) {
+      url.searchParams.set('merchantTransactionId', merchantTransactionId);
+    }
+    return url.toString();
+  }
+
+  private async applyRefundStatusToOrder(orderId: string) {
+    const order = await this.prisma.paymentOrder.findUnique({
+      where: { id: orderId },
+    });
+    if (!order) {
+      return null;
+    }
+
+    const refundedAmountPaise =
+      await this.getSuccessfulRefundedAmountPaise(orderId);
+    if (refundedAmountPaise < order.finalAmountPaise) {
+      return order;
+    }
+
+    if (order.status === PaymentOrderStatus.REFUNDED) {
+      return order;
+    }
+
+    return this.prisma.paymentOrder.update({
+      where: { id: order.id },
+      data: {
+        status: PaymentOrderStatus.REFUNDED,
+        completedAt: new Date(),
+      },
+    });
+  }
+
+  private async getSuccessfulRefundedAmountPaise(orderId: string) {
+    const events = await this.prisma.paymentEvent.findMany({
+      where: {
+        orderId,
+        eventType: 'PHONEPE_REFUND_STATUS',
+      },
+      select: {
+        id: true,
+        providerEventId: true,
+        payloadJson: true,
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+
+    const seenRefundIds = new Set<string>();
+    let totalRefunded = 0;
+
+    for (const event of events) {
+      const payload = (event.payloadJson ?? {}) as {
+        merchantRefundId?: string;
+        state?: string;
+        amount?: number;
+      };
+
+      const refundId =
+        event.providerEventId ??
+        payload.merchantRefundId ??
+        `event:${event.id}`;
+      if (seenRefundIds.has(refundId)) {
+        continue;
+      }
+      seenRefundIds.add(refundId);
+
+      if (!this.isRefundSuccessState(payload.state)) {
+        continue;
+      }
+
+      const amount = Number(payload.amount ?? 0);
+      if (Number.isFinite(amount) && amount > 0) {
+        totalRefunded += amount;
+      }
+    }
+
+    return totalRefunded;
+  }
+
+  private isRefundSuccessState(state?: string | null) {
+    const normalized = (state ?? '').toUpperCase();
+    return ['REFUND_SUCCESS', 'SUCCESS', 'COMPLETED', 'REFUNDED'].includes(
+      normalized,
+    );
+  }
+
+  private isRefundTerminalState(state?: string | null) {
+    const normalized = (state ?? '').toUpperCase();
+    return [
+      'REFUND_SUCCESS',
+      'SUCCESS',
+      'COMPLETED',
+      'REFUNDED',
+      'REFUND_FAILED',
+      'FAILED',
+      'FAILURE',
+      'CANCELLED',
+    ].includes(normalized);
+  }
+
+  private toJsonValue(value: unknown) {
+    return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
+  }
+
+  private async resolveCoupon(
+    userId: string,
+    code: string,
+    amountPaise: number,
+  ) {
     const coupon = await this.prisma.coupon.findUnique({ where: { code } });
     if (!coupon || !coupon.isActive) {
       throw new BadRequestException({
@@ -648,7 +1105,11 @@ export class PaymentsService {
     };
   }
 
-  private async redeemCoupon(orderId: string, userId: string, couponId: string) {
+  private async redeemCoupon(
+    orderId: string,
+    userId: string,
+    couponId: string,
+  ) {
     const existing = await this.prisma.couponRedemption.findFirst({
       where: { orderId },
     });

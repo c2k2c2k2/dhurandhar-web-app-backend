@@ -1,7 +1,9 @@
 import * as Joi from 'joi';
 
 export const envValidationSchema = Joi.object({
-  NODE_ENV: Joi.string().valid('development', 'test', 'production').default('development'),
+  NODE_ENV: Joi.string()
+    .valid('development', 'test', 'production')
+    .default('development'),
   PORT: Joi.number().port().default(4000),
   APP_NAME: Joi.string().default('CareerPointAcademy'),
   APP_URL: Joi.string().uri().required(),
@@ -31,8 +33,14 @@ export const envValidationSchema = Joi.object({
   MINIO_USE_SSL: Joi.boolean().truthy('true').falsy('false').default(false),
   MINIO_REGION: Joi.string().allow('', null).optional(),
   MINIO_PATH_STYLE: Joi.boolean().truthy('true').falsy('false').default(false),
-  MINIO_SKIP_BUCKET_CHECK: Joi.boolean().truthy('true').falsy('false').default(false),
-  MINIO_DEBUG_ERRORS: Joi.boolean().truthy('true').falsy('false').default(false),
+  MINIO_SKIP_BUCKET_CHECK: Joi.boolean()
+    .truthy('true')
+    .falsy('false')
+    .default(false),
+  MINIO_DEBUG_ERRORS: Joi.boolean()
+    .truthy('true')
+    .falsy('false')
+    .default(false),
 
   MAX_PDF_BYTES: Joi.number().integer().default(52428800),
   MAX_IMAGE_BYTES: Joi.number().integer().default(2097152),
@@ -49,18 +57,29 @@ export const envValidationSchema = Joi.object({
   PAYMENTS_THROTTLE_LIMIT: Joi.number().integer().default(5),
   SEARCH_THROTTLE_LIMIT: Joi.number().integer().default(60),
 
-  PHONEPE_API_BASE_URL: Joi.string().uri().required(),
-  PHONEPE_PAY_PATH: Joi.string().required(),
-  PHONEPE_STATUS_PATH: Joi.string().required(),
-  PHONEPE_MERCHANT_ID: Joi.string().required(),
-  PHONEPE_SALT_KEY: Joi.string().required(),
-  PHONEPE_SALT_INDEX: Joi.number().integer().required(),
-  PHONEPE_CALLBACK_URL: Joi.string().uri().required(),
+  PHONEPE_CLIENT_ID: Joi.string().required(),
+  PHONEPE_CLIENT_SECRET: Joi.string().required(),
+  PHONEPE_CLIENT_VERSION: Joi.number().integer().min(1).default(1),
+  PHONEPE_ENV: Joi.string().valid('SANDBOX', 'PRODUCTION').default('SANDBOX'),
   PHONEPE_REDIRECT_URL: Joi.string().uri().required(),
+  PHONEPE_PAYMENT_MESSAGE: Joi.string().allow('', null).optional(),
+  PHONEPE_DISABLE_PAYMENT_RETRY: Joi.boolean()
+    .truthy('true')
+    .falsy('false')
+    .default(false),
+  PHONEPE_PUBLISH_EVENTS: Joi.boolean()
+    .truthy('true')
+    .falsy('false')
+    .default(false),
+  PHONEPE_CALLBACK_USERNAME: Joi.string().allow('', null).optional(),
+  PHONEPE_CALLBACK_PASSWORD: Joi.string().allow('', null).optional(),
   PHONEPE_WEBHOOK_BASIC_USER: Joi.string().allow('', null).optional(),
   PHONEPE_WEBHOOK_BASIC_PASS: Joi.string().allow('', null).optional(),
 
-  SUBSCRIPTION_STACKING: Joi.boolean().truthy('true').falsy('false').default(true),
+  SUBSCRIPTION_STACKING: Joi.boolean()
+    .truthy('true')
+    .falsy('false')
+    .default(true),
   PENDING_ORDER_EXPIRE_MINUTES: Joi.number().integer().default(30),
   PAYMENTS_RECONCILE_INTERVAL_SECONDS: Joi.number().integer().default(60),
 
@@ -71,7 +90,9 @@ export const envValidationSchema = Joi.object({
   SMTP_FROM: Joi.string().required(),
   SMTP_SECURE: Joi.boolean().truthy('true').falsy('false').default(false),
 
-  LOG_LEVEL: Joi.string().valid('fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent').default('info'),
+  LOG_LEVEL: Joi.string()
+    .valid('fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent')
+    .default('info'),
   LOG_NOTE_ACCESS_SAMPLE_RATE: Joi.number().min(0).max(1).default(0.3),
 
   ENABLE_PG_TRGM: Joi.boolean().truthy('true').falsy('false').default(true),

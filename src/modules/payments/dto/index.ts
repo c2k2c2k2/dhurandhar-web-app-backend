@@ -8,3 +8,4 @@ export { CouponCreateDto } from './coupon-create.dto';
 export { CouponQueryDto } from './coupon-query.dto';
 export { CouponUpdateDto } from './coupon-update.dto';
 export { PaymentOrderQueryDto } from './payment-order-query.dto';
+export { PaymentRefundDto } from './payment-refund.dto';

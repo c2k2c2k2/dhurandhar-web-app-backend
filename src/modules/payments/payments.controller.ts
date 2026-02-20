@@ -1,6 +1,16 @@
-import { Body, Controller, Get, Headers, Param, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Headers,
+  Param,
+  Post,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { seconds, Throttle } from '@nestjs/throttler';
+import { Request } from 'express';
 import { Public, CurrentUser } from '../../common/decorators';
 import { JwtAuthGuard } from '../auth/guards';
 import { CheckoutDto } from './dto';
@@ -31,15 +41,23 @@ export class PaymentsController {
     @CurrentUser() user: { userId: string },
     @Param('merchantTransactionId') merchantTransactionId: string,
   ) {
-    return this.paymentsService.getOrderStatus(user.userId, merchantTransactionId);
+    return this.paymentsService.getOrderStatus(
+      user.userId,
+      merchantTransactionId,
+    );
   }
 
   @Public()
   @Post('webhook/phonepe')
   webhook(
-    @Body() payload: Record<string, unknown>,
+    @Body() payload: unknown,
     @Headers('authorization') authorization?: string,
+    @Req() request?: Request & { rawBody?: string },
   ) {
-    return this.paymentsService.handleWebhook(payload, authorization);
+    return this.paymentsService.handleWebhook(
+      payload,
+      authorization,
+      request?.rawBody,
+    );
   }
 }

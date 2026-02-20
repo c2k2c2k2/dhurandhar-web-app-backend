@@ -1,28 +1,28 @@
-export interface PhonepePayResponse {
-  success: boolean;
-  code?: string;
+import type {
+  CallbackResponse,
+  OrderStatusResponse,
+  RefundResponse,
+  RefundStatusResponse,
+  StandardCheckoutPayResponse,
+} from 'pg-sdk-node';
+
+export type PhonepePayResponse = StandardCheckoutPayResponse;
+export type PhonepeStatusResponse = OrderStatusResponse;
+export type PhonepeRefundResponse = RefundResponse;
+export type PhonepeRefundStatusResponse = RefundStatusResponse;
+export type PhonepeCallbackResponse = CallbackResponse;
+
+export interface PhonepeInitiatePaymentPayload {
+  merchantOrderId: string;
+  amount: number;
+  redirectUrl: string;
   message?: string;
-  data?: {
-    instrumentResponse?: {
-      redirectInfo?: {
-        url?: string;
-      };
-    };
-    redirectUrl?: string;
-  };
+  expireAfterSeconds?: number;
+  disablePaymentRetry?: boolean;
 }
 
-export interface PhonepeStatusResponse {
-  success: boolean;
-  code?: string;
-  message?: string;
-  data?: {
-    merchantTransactionId?: string;
-    transactionId?: string;
-    amount?: number;
-    state?: string;
-    status?: string;
-    responseCode?: string;
-    paymentInstrument?: Record<string, unknown>;
-  };
+export interface PhonepeRefundPayload {
+  merchantRefundId: string;
+  originalMerchantOrderId: string;
+  amount: number;
 }
