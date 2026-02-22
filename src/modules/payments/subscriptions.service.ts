@@ -9,6 +9,9 @@ type EntitlementConfig = {
   scopeJson?: Record<string, unknown>;
 };
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_LIFETIME_DAYS = 36500;
+
 @Injectable()
 export class SubscriptionsService {
   private readonly logger = new Logger(SubscriptionsService.name);
@@ -47,7 +50,10 @@ export class SubscriptionsService {
       ? activeSubs.find((sub) => sub.endsAt && sub.endsAt > now)?.endsAt
       : undefined;
     const startsAt = latestEnd ?? now;
-    const endsAt = new Date(startsAt.getTime() + plan.durationDays * 24 * 60 * 60 * 1000);
+    const isLifetime = this.isLifetimePlan(plan);
+    const endsAt = isLifetime
+      ? null
+      : new Date(startsAt.getTime() + plan.durationDays * DAY_MS);
 
     const subscription = await this.prisma.subscription.create({
       data: {
@@ -114,7 +120,7 @@ export class SubscriptionsService {
     userId: string,
     plan: { featuresJson: Prisma.JsonValue | null },
     startsAt: Date,
-    endsAt: Date,
+    endsAt: Date | null,
   ) {
     const config = (plan.featuresJson ?? {}) as Record<string, unknown>;
     const entitlements =
@@ -152,5 +158,32 @@ export class SubscriptionsService {
         reason: 'SUBSCRIPTION',
       })),
     });
+  }
+
+  private isLifetimePlan(plan: {
+    durationDays: number;
+    metadataJson: Prisma.JsonValue | null;
+  }) {
+    const metadata = plan.metadataJson;
+    if (metadata && typeof metadata === 'object' && !Array.isArray(metadata)) {
+      const validity = (metadata as Record<string, unknown>).validity;
+      if (validity && typeof validity === 'object' && !Array.isArray(validity)) {
+        const unit = (validity as Record<string, unknown>).unit;
+        if (typeof unit === 'string' && unit.toUpperCase() === 'LIFETIME') {
+          return true;
+        }
+      }
+    }
+
+    const lifetimeDays = Number(
+      this.configService.get<number>('SUBSCRIPTION_LIFETIME_DAYS') ??
+        DEFAULT_LIFETIME_DAYS,
+    );
+    const safeLifetimeDays =
+      Number.isFinite(lifetimeDays) && lifetimeDays > 0
+        ? lifetimeDays
+        : DEFAULT_LIFETIME_DAYS;
+
+    return plan.durationDays >= safeLifetimeDays;
   }
 }

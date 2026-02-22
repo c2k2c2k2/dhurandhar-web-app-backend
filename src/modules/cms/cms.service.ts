@@ -549,6 +549,10 @@ export class CmsService {
       .map((item) => item.trim())
       .filter(Boolean);
 
+    if (envKey === 'CMS_STUDENT_KEYS' && !allowed.includes('app.languages')) {
+      allowed.push('app.languages');
+    }
+
     if (!requested || requested.length === 0) {
       return allowed;
     }

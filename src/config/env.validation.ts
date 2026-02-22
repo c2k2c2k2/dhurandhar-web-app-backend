@@ -24,6 +24,11 @@ export const envValidationSchema = Joi.object({
 
   SUPERADMIN_EMAIL: Joi.string().email().required(),
   SUPERADMIN_PASSWORD: Joi.string().required(),
+  SEED_ON_BOOT: Joi.boolean().truthy('true').falsy('false').optional(),
+  SEED_DEFAULT_CATALOG: Joi.boolean().truthy('true').falsy('false').optional(),
+  SEED_SAMPLE_DATA: Joi.boolean().truthy('true').falsy('false').optional(),
+  DEMO_STUDENT_EMAIL: Joi.string().email().optional(),
+  DEMO_STUDENT_PASSWORD: Joi.string().optional(),
 
   MINIO_ENDPOINT: Joi.string().required(),
   MINIO_PORT: Joi.number().port().default(9000),
@@ -80,6 +85,8 @@ export const envValidationSchema = Joi.object({
     .truthy('true')
     .falsy('false')
     .default(true),
+  SUBSCRIPTION_RENEWAL_WINDOW_DAYS: Joi.number().integer().min(0).default(7),
+  SUBSCRIPTION_LIFETIME_DAYS: Joi.number().integer().min(365).default(36500),
   PENDING_ORDER_EXPIRE_MINUTES: Joi.number().integer().default(30),
   PAYMENTS_RECONCILE_INTERVAL_SECONDS: Joi.number().integer().default(60),
 

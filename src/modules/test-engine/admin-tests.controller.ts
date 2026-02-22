@@ -21,6 +21,13 @@ export class AdminTestsController {
     return this.testEngineService.listAdminTests(query);
   }
 
+  @Get('presets')
+  @RequireUserType('ADMIN')
+  @Policy('tests.crud')
+  listPresets() {
+    return this.testEngineService.listTestPresets();
+  }
+
   @Post()
   @RequireUserType('ADMIN')
   @Policy('tests.crud')

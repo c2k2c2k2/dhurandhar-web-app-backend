@@ -3,6 +3,7 @@ export {};
 export { PlanCreateDto } from './plan-create.dto';
 export { PlanQueryDto } from './plan-query.dto';
 export { PlanUpdateDto } from './plan-update.dto';
+export { PlanDurationUnit } from './plan-validity.dto';
 export { CheckoutDto } from './checkout.dto';
 export { CouponCreateDto } from './coupon-create.dto';
 export { CouponQueryDto } from './coupon-query.dto';

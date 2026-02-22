@@ -28,6 +28,7 @@ import {
   UserType,
 } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
+import { DEFAULT_TEST_PRESETS } from '../../modules/test-engine/test-presets';
 
 interface SeedPermission {
   key: string;
@@ -50,6 +51,33 @@ interface SeedNotificationTemplate {
   isActive?: boolean;
 }
 
+interface DefaultPlanSeed {
+  key: string;
+  name: string;
+  tier: string;
+  pricePaise: number;
+  durationDays: number;
+  validity: {
+    unit: 'DAYS' | 'MONTHS' | 'YEARS' | 'LIFETIME';
+    value: number | null;
+    label: string;
+  };
+  features: string[];
+  boundaries: Record<string, unknown>;
+}
+
+interface DefaultCouponSeed {
+  code: string;
+  type: CouponType;
+  value: number;
+  minAmountPaise?: number;
+  maxRedemptions?: number;
+  maxRedemptionsPerUser?: number;
+}
+
+const DEFAULT_RENEWAL_WINDOW_DAYS = 7;
+const DEFAULT_LIFETIME_DAYS = 36500;
+
 @Injectable()
 export class SeedService implements OnModuleInit {
   private readonly logger = new Logger(SeedService.name);
@@ -60,9 +88,15 @@ export class SeedService implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
+    if (!this.shouldSeedOnBoot()) {
+      this.logger.log('Skipping startup seed (SEED_ON_BOOT=false).');
+      return;
+    }
+
     await this.seedRolesAndPermissions();
     await this.seedSuperAdmin();
     await this.seedNotificationTemplates();
+    await this.seedDefaultCatalog();
     await this.seedSampleData();
   }
 
@@ -311,6 +345,310 @@ export class SeedService implements OnModuleInit {
     });
 
     this.logger.log(`Seeded ${missing.length} notification templates.`);
+  }
+
+  private async seedDefaultCatalog(): Promise<void> {
+    if (!this.shouldSeedDefaultCatalog()) {
+      return;
+    }
+
+    const admin = await this.prisma.user.findFirst({
+      where: { type: UserType.ADMIN },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true },
+    });
+    const adminId = admin?.id;
+
+    const renewalWindowDays = this.resolveRenewalWindowDays();
+    const lifetimeDays = this.resolveLifetimeDays();
+
+    let plansCreated = 0;
+    const planSeeds = this.getDefaultPlanSeeds(lifetimeDays, renewalWindowDays);
+    for (const seed of planSeeds) {
+      const existing = await this.prisma.plan.findUnique({
+        where: { key: seed.key },
+        select: { id: true },
+      });
+      if (existing) {
+        continue;
+      }
+
+      await this.prisma.plan.create({
+        data: {
+          key: seed.key,
+          name: seed.name,
+          tier: seed.tier,
+          pricePaise: seed.pricePaise,
+          durationDays: seed.durationDays,
+          isActive: true,
+          metadataJson: {
+            region: 'IN-MH',
+            examCategory: 'competitive',
+            renewalWindowDays,
+            boundaries: seed.boundaries,
+            validity: {
+              unit: seed.validity.unit,
+              value: seed.validity.value,
+              durationDays: seed.durationDays,
+              label: seed.validity.label,
+            },
+          } as Prisma.InputJsonValue,
+          featuresJson: seed.features as Prisma.InputJsonValue,
+        },
+      });
+      plansCreated += 1;
+    }
+
+    let couponsCreated = 0;
+    const couponSeeds = this.getDefaultCouponSeeds();
+    for (const seed of couponSeeds) {
+      const existing = await this.prisma.coupon.findUnique({
+        where: { code: seed.code },
+        select: { id: true },
+      });
+      if (existing) {
+        continue;
+      }
+
+      await this.prisma.coupon.create({
+        data: {
+          code: seed.code,
+          type: seed.type,
+          value: seed.value,
+          minAmountPaise: seed.minAmountPaise,
+          maxRedemptions: seed.maxRedemptions,
+          maxRedemptionsPerUser: seed.maxRedemptionsPerUser,
+          isActive: true,
+          metadataJson: {
+            region: 'IN-MH',
+            seededBy: 'default-catalog',
+          } as Prisma.InputJsonValue,
+        },
+      });
+      couponsCreated += 1;
+    }
+
+    const seededLanguageConfig = await this.ensurePublishedAppConfig(
+      'app.languages',
+      {
+        enabledLanguages: ['en', 'hi', 'mr'],
+        defaultLanguage: 'mr',
+        fallbackLanguage: 'en',
+        labels: {
+          en: 'English',
+          hi: 'Hindi',
+          mr: 'Marathi',
+        },
+      },
+      adminId,
+    );
+
+    const seededPresetConfig = await this.ensurePublishedAppConfig(
+      'test.presets',
+      {
+        region: 'IN-MH',
+        presets: DEFAULT_TEST_PRESETS,
+      },
+      adminId,
+    );
+
+    if (
+      plansCreated > 0 ||
+      couponsCreated > 0 ||
+      seededLanguageConfig ||
+      seededPresetConfig
+    ) {
+      this.logger.log(
+        `Seeded default catalog (plans=${plansCreated}, coupons=${couponsCreated}, app.languages=${seededLanguageConfig ? 'created' : 'kept'}, test.presets=${seededPresetConfig ? 'created' : 'kept'}).`,
+      );
+    }
+  }
+
+  private getDefaultPlanSeeds(
+    lifetimeDays: number,
+    renewalWindowDays: number,
+  ): DefaultPlanSeed[] {
+    return [
+      {
+        key: 'maha-starter-1m',
+        name: 'Maharashtra Starter - 1 Month',
+        tier: 'starter',
+        pricePaise: 79900,
+        durationDays: 30,
+        validity: {
+          unit: 'MONTHS',
+          value: 1,
+          label: '1 month',
+        },
+        features: [
+          'Unlimited notes access',
+          'Daily practice sets',
+          'Section-wise mock tests',
+          'English, Hindi and Marathi interface',
+        ],
+        boundaries: {
+          notesAccess: true,
+          testsAccess: true,
+          practiceAccess: true,
+          downloadEnabled: false,
+          renewalWindowDays,
+        },
+      },
+      {
+        key: 'maha-smart-3m',
+        name: 'Maharashtra Smart - 3 Months',
+        tier: 'standard',
+        pricePaise: 199900,
+        durationDays: 90,
+        validity: {
+          unit: 'MONTHS',
+          value: 3,
+          label: '3 months',
+        },
+        features: [
+          'Everything in Starter',
+          'Full-length weekly mock tests',
+          'Topic analytics and weak-area insights',
+          'Priority support',
+        ],
+        boundaries: {
+          notesAccess: true,
+          testsAccess: true,
+          practiceAccess: true,
+          printPapersAccess: true,
+          renewalWindowDays,
+        },
+      },
+      {
+        key: 'maha-pro-1y',
+        name: 'Maharashtra Pro - 1 Year',
+        tier: 'pro',
+        pricePaise: 549900,
+        durationDays: 365,
+        validity: {
+          unit: 'YEARS',
+          value: 1,
+          label: '1 year',
+        },
+        features: [
+          'Everything in Smart',
+          'Unlimited full mock attempts',
+          'Exam strategy booster modules',
+          'Premium doubt support',
+        ],
+        boundaries: {
+          notesAccess: true,
+          testsAccess: true,
+          practiceAccess: true,
+          printPapersAccess: true,
+          downloadEnabled: true,
+          renewalWindowDays,
+        },
+      },
+      {
+        key: 'maha-lifetime',
+        name: 'Maharashtra Lifetime',
+        tier: 'lifetime',
+        pricePaise: 999900,
+        durationDays: lifetimeDays,
+        validity: {
+          unit: 'LIFETIME',
+          value: null,
+          label: 'Lifetime access',
+        },
+        features: [
+          'Lifetime access to notes, tests and practice',
+          'All future preset updates included',
+          'Highest priority support',
+          'One-time purchase, no recurring renewals',
+        ],
+        boundaries: {
+          notesAccess: true,
+          testsAccess: true,
+          practiceAccess: true,
+          printPapersAccess: true,
+          downloadEnabled: true,
+          renewalWindowDays: null,
+        },
+      },
+    ];
+  }
+
+  private getDefaultCouponSeeds(): DefaultCouponSeed[] {
+    return [
+      {
+        code: 'WELCOME10',
+        type: CouponType.PERCENT,
+        value: 10,
+        minAmountPaise: 49900,
+        maxRedemptionsPerUser: 1,
+      },
+      {
+        code: 'MAHA250',
+        type: CouponType.FLAT,
+        value: 25000,
+        minAmountPaise: 99900,
+      },
+      {
+        code: 'EXAM20',
+        type: CouponType.PERCENT,
+        value: 20,
+        minAmountPaise: 199900,
+        maxRedemptions: 5000,
+        maxRedemptionsPerUser: 2,
+      },
+    ];
+  }
+
+  private async ensurePublishedAppConfig(
+    key: string,
+    configJson: Record<string, unknown>,
+    createdByUserId?: string,
+  ) {
+    const existingPublished = await this.prisma.appConfig.findFirst({
+      where: { key, status: CmsConfigStatus.PUBLISHED },
+      select: { id: true },
+    });
+    if (existingPublished) {
+      return false;
+    }
+
+    const latest = await this.prisma.appConfig.findFirst({
+      where: { key },
+      orderBy: { version: 'desc' },
+      select: { version: true },
+    });
+
+    await this.prisma.appConfig.create({
+      data: {
+        key,
+        version: (latest?.version ?? 0) + 1,
+        status: CmsConfigStatus.PUBLISHED,
+        publishedAt: new Date(),
+        createdByUserId,
+        configJson: configJson as Prisma.InputJsonValue,
+      },
+    });
+
+    return true;
+  }
+
+  private shouldSeedDefaultCatalog() {
+    const explicit = this.configService.get<string | boolean>('SEED_DEFAULT_CATALOG');
+    if (explicit === undefined || explicit === null || explicit === '') {
+      const env = this.configService.get<string>('NODE_ENV') ?? 'development';
+      return env !== 'production';
+    }
+    return this.parseBoolean(explicit);
+  }
+
+  private shouldSeedOnBoot() {
+    const explicit = this.configService.get<string | boolean>('SEED_ON_BOOT');
+    if (explicit === undefined || explicit === null || explicit === '') {
+      const env = this.configService.get<string>('NODE_ENV') ?? 'development';
+      return env !== 'production';
+    }
+    return this.parseBoolean(explicit);
   }
 
   private async seedSampleData(): Promise<void> {
@@ -1101,7 +1439,30 @@ export class SeedService implements OnModuleInit {
   private parseBoolean(value?: string | boolean) {
     if (typeof value === 'boolean') return value;
     if (!value) return false;
-    return value === 'true' || value === '1';
+    const normalized = value.trim().toLowerCase();
+    return ['true', '1', 'yes', 'on'].includes(normalized);
+  }
+
+  private resolveRenewalWindowDays() {
+    const value = Number(
+      this.configService.get<number>('SUBSCRIPTION_RENEWAL_WINDOW_DAYS') ??
+        DEFAULT_RENEWAL_WINDOW_DAYS,
+    );
+    if (!Number.isFinite(value) || value < 0) {
+      return DEFAULT_RENEWAL_WINDOW_DAYS;
+    }
+    return value;
+  }
+
+  private resolveLifetimeDays() {
+    const value = Number(
+      this.configService.get<number>('SUBSCRIPTION_LIFETIME_DAYS') ??
+        DEFAULT_LIFETIME_DAYS,
+    );
+    if (!Number.isFinite(value) || value <= 0) {
+      return DEFAULT_LIFETIME_DAYS;
+    }
+    return value;
   }
 
   private async mapPermissionsByKey(items: SeedPermission[]): Promise<Map<string, Permission>> {

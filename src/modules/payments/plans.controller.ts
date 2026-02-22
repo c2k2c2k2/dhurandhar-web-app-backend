@@ -1,6 +1,7 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { Public } from '../../common/decorators';
+import { CurrentUser, Public } from '../../common/decorators';
+import { JwtAuthGuard } from '../auth/guards';
 import { PlansService } from './plans.service';
 
 @ApiTags('plans')
@@ -12,5 +13,11 @@ export class PlansController {
   @Get()
   listPlans() {
     return this.plansService.listPublicPlans();
+  }
+
+  @Get('me/options')
+  @UseGuards(JwtAuthGuard)
+  listPlansForMe(@CurrentUser() user: { userId: string }) {
+    return this.plansService.listPlansForUser(user.userId);
   }
 }

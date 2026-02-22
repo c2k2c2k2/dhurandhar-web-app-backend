@@ -6,6 +6,7 @@ import {
 import {
   AttemptStatus,
   AttemptEventType,
+  CmsConfigStatus,
   Prisma,
   QuestionDifficulty,
   TestType,
@@ -19,29 +20,53 @@ import {
   TestQueryDto,
   TestUpdateDto,
 } from './dto';
+import { DEFAULT_TEST_PRESETS, TestPreset } from './test-presets';
 
 type TestConfig = {
+  presetKey?: string;
   questionIds?: string[];
   items?: { questionId: string; marks?: number }[];
+  sections?: Array<{
+    key?: string;
+    title?: string;
+    subjectId?: string;
+    topicIds?: string[];
+    difficulty?: QuestionDifficulty;
+    count: number;
+    durationMinutes?: number;
+    marksPerQuestion?: number;
+    negativeMarksPerWrong?: number;
+    questionIds?: string[];
+  }>;
   mixer?: {
     subjectId?: string;
     topicIds?: string[];
     difficulty?: QuestionDifficulty;
     count: number;
   };
+  durationMinutes?: number;
   marksPerQuestion?: number;
+  negativeMarksPerWrong?: number;
 };
 
 @Injectable()
 export class TestEngineService {
   constructor(private readonly prisma: PrismaService) {}
 
+  async listTestPresets() {
+    const configuredPresets = await this.getConfiguredPresets();
+    const presets = configuredPresets.length
+      ? configuredPresets
+      : DEFAULT_TEST_PRESETS;
+    return { data: presets };
+  }
+
   async createTest(userId: string, dto: TestCreateDto) {
     if (dto.subjectId) {
       await this.assertSubjectExists(dto.subjectId);
     }
 
-    const config = dto.configJson as TestConfig;
+    const config = await this.normalizeTestConfig(dto.configJson as TestConfig);
 
     return this.prisma.$transaction(async (tx) => {
       const test = await tx.test.create({
@@ -51,7 +76,7 @@ export class TestEngineService {
           title: dto.title,
           description: dto.description,
           type: dto.type,
-          configJson: dto.configJson as Prisma.InputJsonValue,
+          configJson: config as Prisma.InputJsonValue,
           isPublished: dto.isPublished ?? false,
           startsAt: dto.startsAt ? new Date(dto.startsAt) : undefined,
           endsAt: dto.endsAt ? new Date(dto.endsAt) : undefined,
@@ -77,7 +102,9 @@ export class TestEngineService {
       await this.assertSubjectExists(dto.subjectId);
     }
 
-    const config = (dto.configJson ?? test.configJson) as TestConfig;
+    const config = dto.configJson
+      ? await this.normalizeTestConfig(dto.configJson as TestConfig)
+      : (test.configJson as TestConfig);
 
     return this.prisma.$transaction(async (tx) => {
       const updated = await tx.test.update({
@@ -87,7 +114,9 @@ export class TestEngineService {
           title: dto.title ?? undefined,
           description: dto.description ?? undefined,
           type: dto.type ?? undefined,
-          configJson: dto.configJson ? (dto.configJson as Prisma.InputJsonValue) : undefined,
+          configJson: dto.configJson
+            ? (config as Prisma.InputJsonValue)
+            : undefined,
           isPublished: dto.isPublished ?? undefined,
           startsAt: dto.startsAt ? new Date(dto.startsAt) : undefined,
           endsAt: dto.endsAt ? new Date(dto.endsAt) : undefined,
@@ -311,8 +340,11 @@ export class TestEngineService {
 
     const answersMap = this.normalizeAnswers(dto.answersJson ?? (attempt.answersJson as Prisma.JsonValue | null));
 
+    const testConfig = (attempt.test?.configJson as TestConfig) ?? {};
     const marksMap = await this.getMarksMap(attempt.testId);
-    const defaultMark = this.getDefaultMark(attempt.test?.configJson as TestConfig);
+    const defaultMark = this.getDefaultMark(testConfig);
+    const defaultNegativeMark = this.getDefaultNegativeMark(testConfig);
+    const sectionRuleByOrder = this.buildSectionRuleByOrder(testConfig);
 
     let totalScore = 0;
     let correctCount = 0;
@@ -320,8 +352,17 @@ export class TestEngineService {
 
     const perTopic: Record<string, { correct: number; wrong: number; total: number }> = {};
     const perSubject: Record<string, { correct: number; wrong: number; total: number }> = {};
+    const perSection: Record<
+      string,
+      { correct: number; wrong: number; total: number; netScore: number }
+    > = {};
 
-    for (const attemptQuestion of attempt.questions) {
+    const orderedAttemptQuestions = [...attempt.questions].sort(
+      (a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0),
+    );
+
+    for (let index = 0; index < orderedAttemptQuestions.length; index += 1) {
+      const attemptQuestion = orderedAttemptQuestions[index];
       const question = attemptQuestion.question;
       if (!question) {
         continue;
@@ -330,12 +371,16 @@ export class TestEngineService {
       const answer = answersMap.get(question.id);
       const isCorrect = this.isEqual(answer, question.correctAnswerJson);
 
-      const mark = marksMap.get(question.id) ?? defaultMark;
+      const sectionRule = sectionRuleByOrder.get(attemptQuestion.orderIndex ?? index);
+      const mark = marksMap.get(question.id) ?? sectionRule?.marksPerQuestion ?? defaultMark;
+      const negativeMark =
+        sectionRule?.negativeMarksPerWrong ?? defaultNegativeMark;
 
       if (isCorrect) {
         totalScore += mark;
         correctCount += 1;
       } else {
+        totalScore -= negativeMark;
         wrongCount += 1;
       }
 
@@ -357,13 +402,32 @@ export class TestEngineService {
       } else {
         perSubject[subjectKey].wrong += 1;
       }
+
+      const sectionKey = sectionRule?.sectionKey ?? 'default';
+      perSection[sectionKey] = perSection[sectionKey] ?? {
+        correct: 0,
+        wrong: 0,
+        total: 0,
+        netScore: 0,
+      };
+      perSection[sectionKey].total += 1;
+      if (isCorrect) {
+        perSection[sectionKey].correct += 1;
+        perSection[sectionKey].netScore += mark;
+      } else {
+        perSection[sectionKey].wrong += 1;
+        perSection[sectionKey].netScore -= negativeMark;
+      }
     }
 
     const scoreJson = {
-      totalQuestions: attempt.questions.length,
+      totalQuestions: orderedAttemptQuestions.length,
       correctCount,
       wrongCount,
       totalScore,
+      marksPerQuestion: defaultMark,
+      negativeMarksPerWrong: defaultNegativeMark,
+      perSection,
       perTopic,
       perSubject,
     };
@@ -471,6 +535,28 @@ export class TestEngineService {
   private resolveFixedItems(
     config: TestConfig,
   ): Array<{ questionId: string; orderIndex: number; marks?: number }> {
+    if (Array.isArray(config.sections) && config.sections.length > 0) {
+      const fromSections: Array<{ questionId: string; orderIndex: number; marks?: number }> = [];
+      let orderIndex = 0;
+      for (const section of config.sections) {
+        if (!Array.isArray(section.questionIds) || section.questionIds.length === 0) {
+          continue;
+        }
+        for (const questionId of section.questionIds) {
+          fromSections.push({
+            questionId,
+            orderIndex,
+            marks: section.marksPerQuestion ?? config.marksPerQuestion,
+          });
+          orderIndex += 1;
+        }
+      }
+
+      if (fromSections.length > 0) {
+        return fromSections;
+      }
+    }
+
     if (Array.isArray(config.items) && config.items.length > 0) {
       return config.items.map((item, index) => ({
         questionId: item.questionId,
@@ -501,6 +587,10 @@ export class TestEngineService {
         questionId: item.questionId,
         orderIndex: item.orderIndex ?? index,
       }));
+    }
+
+    if (Array.isArray(config.sections) && config.sections.length > 0) {
+      return this.selectSectionQuestions(test, config);
     }
 
     const mixer = config.mixer;
@@ -539,6 +629,85 @@ export class TestEngineService {
     }));
   }
 
+  private async selectSectionQuestions(
+    test: { id: string; subjectId: string | null },
+    config: TestConfig,
+  ) {
+    if (!Array.isArray(config.sections) || config.sections.length === 0) {
+      return [];
+    }
+
+    const selected: Array<{ questionId: string; orderIndex: number }> = [];
+    const selectedIds = new Set<string>();
+    let orderIndex = 0;
+
+    for (let sectionIndex = 0; sectionIndex < config.sections.length; sectionIndex += 1) {
+      const section = config.sections[sectionIndex];
+      const sectionTitle = section.title || section.key || `Section ${sectionIndex + 1}`;
+
+      if (Array.isArray(section.questionIds) && section.questionIds.length > 0) {
+        const questionIds = section.questionIds;
+        const questions = await this.prisma.question.findMany({
+          where: { id: { in: questionIds }, isPublished: true },
+          select: { id: true },
+        });
+        if (questions.length !== questionIds.length) {
+          throw new BadRequestException({
+            code: 'TEST_SECTION_QUESTION_INVALID',
+            message: `One or more fixed questions are invalid in section '${sectionTitle}'.`,
+          });
+        }
+
+        for (const questionId of questionIds) {
+          if (selectedIds.has(questionId)) {
+            continue;
+          }
+          selectedIds.add(questionId);
+          selected.push({ questionId, orderIndex });
+          orderIndex += 1;
+        }
+        continue;
+      }
+
+      const count = Number(section.count ?? 0);
+      if (!Number.isFinite(count) || count <= 0) {
+        throw new BadRequestException({
+          code: 'TEST_SECTION_COUNT_INVALID',
+          message: `Question count is required for section '${sectionTitle}'.`,
+        });
+      }
+
+      const where = {
+        isPublished: true,
+        subjectId: section.subjectId ?? test.subjectId ?? undefined,
+        topicId: section.topicIds?.length ? { in: section.topicIds } : undefined,
+        difficulty: section.difficulty ?? undefined,
+        id: selectedIds.size ? { notIn: Array.from(selectedIds) } : undefined,
+      };
+
+      const pool = await this.prisma.question.findMany({
+        where,
+        select: { id: true },
+      });
+
+      if (pool.length < count) {
+        throw new BadRequestException({
+          code: 'TEST_SECTION_POOL_INSUFFICIENT',
+          message: `Not enough questions available for section '${sectionTitle}'.`,
+        });
+      }
+
+      const picked = this.shuffle(pool).slice(0, count);
+      for (const question of picked) {
+        selectedIds.add(question.id);
+        selected.push({ questionId: question.id, orderIndex });
+        orderIndex += 1;
+      }
+    }
+
+    return selected;
+  }
+
   private async getMarksMap(testId: string) {
     const entries = await this.prisma.testQuestion.findMany({
       where: { testId },
@@ -562,6 +731,237 @@ export class TestEngineService {
       return mark;
     }
     return 1;
+  }
+
+  private getDefaultNegativeMark(config?: TestConfig) {
+    if (!config) {
+      return 0;
+    }
+
+    const mark = config.negativeMarksPerWrong;
+    if (typeof mark === 'number' && mark >= 0) {
+      return mark;
+    }
+
+    return 0;
+  }
+
+  private buildSectionRuleByOrder(config: TestConfig) {
+    const map = new Map<
+      number,
+      {
+        sectionKey: string;
+        marksPerQuestion?: number;
+        negativeMarksPerWrong?: number;
+      }
+    >();
+
+    if (!Array.isArray(config.sections) || config.sections.length === 0) {
+      return map;
+    }
+
+    let cursor = 0;
+    config.sections.forEach((section, index) => {
+      const countFromIds = Array.isArray(section.questionIds)
+        ? section.questionIds.length
+        : 0;
+      const count = Number(section.count ?? countFromIds);
+      if (!Number.isFinite(count) || count <= 0) {
+        return;
+      }
+
+      const sectionKey =
+        section.key || section.title || `section_${index + 1}`;
+      for (let i = 0; i < count; i += 1) {
+        map.set(cursor + i, {
+          sectionKey,
+          marksPerQuestion: section.marksPerQuestion,
+          negativeMarksPerWrong: section.negativeMarksPerWrong,
+        });
+      }
+      cursor += count;
+    });
+
+    return map;
+  }
+
+  private async normalizeTestConfig(config: TestConfig): Promise<TestConfig> {
+    if (!config?.presetKey) {
+      return config;
+    }
+
+    const preset = await this.getPresetByKey(config.presetKey);
+    if (!preset) {
+      throw new BadRequestException({
+        code: 'TEST_PRESET_NOT_FOUND',
+        message: 'Selected test preset was not found.',
+      });
+    }
+
+    return {
+      ...config,
+      durationMinutes:
+        typeof config.durationMinutes === 'number' && config.durationMinutes > 0
+          ? config.durationMinutes
+          : preset.durationMinutes,
+      marksPerQuestion:
+        typeof config.marksPerQuestion === 'number' && config.marksPerQuestion > 0
+          ? config.marksPerQuestion
+          : preset.marksPerQuestion,
+      negativeMarksPerWrong:
+        typeof config.negativeMarksPerWrong === 'number' &&
+        config.negativeMarksPerWrong >= 0
+          ? config.negativeMarksPerWrong
+          : preset.negativeMarksPerWrong,
+      sections:
+        Array.isArray(config.sections) && config.sections.length > 0
+          ? config.sections
+          : preset.sections.map((section) => ({
+              key: section.key,
+              title: section.title,
+              count: section.count,
+              durationMinutes: section.durationMinutes,
+              subjectId: section.subjectId,
+              topicIds: section.topicIds,
+              difficulty: section.difficulty,
+              marksPerQuestion: section.marksPerQuestion,
+              negativeMarksPerWrong: section.negativeMarksPerWrong,
+              questionIds: section.questionIds,
+            })),
+    };
+  }
+
+  private async getPresetByKey(key: string) {
+    const configured = await this.getConfiguredPresets();
+    const presets = configured.length ? configured : DEFAULT_TEST_PRESETS;
+    return presets.find((preset) => preset.key === key) ?? null;
+  }
+
+  private async getConfiguredPresets(): Promise<TestPreset[]> {
+    const config = await this.prisma.appConfig.findFirst({
+      where: { key: 'test.presets', status: CmsConfigStatus.PUBLISHED },
+      orderBy: { version: 'desc' },
+      select: { configJson: true },
+    });
+
+    if (!config?.configJson) {
+      return [];
+    }
+
+    const raw = config.configJson as unknown;
+    const presets = Array.isArray(raw)
+      ? raw
+      : raw && typeof raw === 'object' && Array.isArray((raw as { presets?: unknown[] }).presets)
+        ? (raw as { presets: unknown[] }).presets
+        : [];
+
+    return presets
+      .map((item) => this.normalizePreset(item))
+      .filter((item): item is TestPreset => Boolean(item));
+  }
+
+  private normalizePreset(value: unknown): TestPreset | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+
+    const raw = value as Record<string, unknown>;
+    if (
+      typeof raw.key !== 'string' ||
+      typeof raw.title !== 'string' ||
+      !Array.isArray(raw.sections)
+    ) {
+      return null;
+    }
+
+    const durationMinutes =
+      typeof raw.durationMinutes === 'number' && raw.durationMinutes > 0
+        ? raw.durationMinutes
+        : 60;
+    const marksPerQuestion =
+      typeof raw.marksPerQuestion === 'number' && raw.marksPerQuestion > 0
+        ? raw.marksPerQuestion
+        : 1;
+    const negativeMarksPerWrong =
+      typeof raw.negativeMarksPerWrong === 'number' &&
+      raw.negativeMarksPerWrong >= 0
+        ? raw.negativeMarksPerWrong
+        : 0;
+
+    const sections: TestPreset['sections'] = [];
+    raw.sections.forEach((section, index) => {
+      if (!section || typeof section !== 'object' || Array.isArray(section)) {
+        return;
+      }
+      const item = section as Record<string, unknown>;
+      const count =
+        typeof item.count === 'number' && item.count > 0
+          ? item.count
+          : Array.isArray(item.questionIds)
+            ? item.questionIds.length
+            : 0;
+      if (count <= 0) {
+        return;
+      }
+
+      sections.push({
+        key: typeof item.key === 'string' ? item.key : `section_${index + 1}`,
+        title:
+          typeof item.title === 'string'
+            ? item.title
+            : `Section ${index + 1}`,
+        count,
+        durationMinutes:
+          typeof item.durationMinutes === 'number' && item.durationMinutes > 0
+            ? item.durationMinutes
+            : undefined,
+        subjectId: typeof item.subjectId === 'string' ? item.subjectId : undefined,
+        topicIds: Array.isArray(item.topicIds)
+          ? item.topicIds.filter((id): id is string => typeof id === 'string')
+          : undefined,
+        difficulty:
+          typeof item.difficulty === 'string'
+            ? (item.difficulty as QuestionDifficulty)
+            : undefined,
+        marksPerQuestion:
+          typeof item.marksPerQuestion === 'number' && item.marksPerQuestion > 0
+            ? item.marksPerQuestion
+            : undefined,
+        negativeMarksPerWrong:
+          typeof item.negativeMarksPerWrong === 'number' &&
+          item.negativeMarksPerWrong >= 0
+            ? item.negativeMarksPerWrong
+            : undefined,
+        questionIds: Array.isArray(item.questionIds)
+          ? item.questionIds.filter((id): id is string => typeof id === 'string')
+          : undefined,
+      });
+    });
+
+    if (!sections.length) {
+      return null;
+    }
+
+    return {
+      key: raw.key,
+      title: raw.title,
+      exam: typeof raw.exam === 'string' ? raw.exam : 'Custom',
+      description:
+        typeof raw.description === 'string' ? raw.description : undefined,
+      durationMinutes,
+      marksPerQuestion,
+      negativeMarksPerWrong,
+      sections,
+    };
+  }
+
+  private shuffle<T>(items: T[]) {
+    const copy = [...items];
+    for (let i = copy.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+    return copy;
   }
 
   private normalizeAnswers(value: unknown) {

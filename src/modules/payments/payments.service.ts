@@ -10,6 +10,7 @@ import {
   PaymentOrderStatus,
   PaymentTransactionStatus,
   Prisma,
+  SubscriptionStatus,
 } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../../infra/prisma/prisma.service';
@@ -17,6 +18,9 @@ import { CheckoutDto, PaymentOrderQueryDto, PaymentRefundDto } from './dto';
 import { PhonepeService } from './phonepe/phonepe.service';
 import { SubscriptionsService } from './subscriptions.service';
 import { NotificationsService } from '../notifications/notifications.service';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_RENEWAL_WINDOW_DAYS = 7;
 
 @Injectable()
 export class PaymentsService {
@@ -59,6 +63,8 @@ export class PaymentsService {
     }
 
     const now = new Date();
+    await this.assertPlanPurchaseAllowed(userId, plan.id, now);
+
     const expiresMinutes =
       this.configService.get<number>('PENDING_ORDER_EXPIRE_MINUTES') ?? 30;
     const expiresAt = new Date(now.getTime() + expiresMinutes * 60 * 1000);
@@ -1122,6 +1128,64 @@ export class PaymentsService {
         couponId,
         userId,
         orderId,
+      },
+    });
+  }
+
+  private async assertPlanPurchaseAllowed(
+    userId: string,
+    planId: string,
+    now: Date,
+  ) {
+    const activeSamePlan = await this.prisma.subscription.findFirst({
+      where: {
+        userId,
+        planId,
+        status: SubscriptionStatus.ACTIVE,
+        OR: [{ endsAt: null }, { endsAt: { gt: now } }],
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, endsAt: true },
+    });
+
+    if (!activeSamePlan) {
+      return;
+    }
+
+    if (!activeSamePlan.endsAt) {
+      throw new BadRequestException({
+        code: 'PLAN_REPURCHASE_BLOCKED',
+        message: 'This lifetime subscription is already active.',
+        details: {
+          reason: 'LIFETIME_ACTIVE',
+        },
+      });
+    }
+
+    const renewalWindowDays = Number(
+      this.configService.get<number>('SUBSCRIPTION_RENEWAL_WINDOW_DAYS') ??
+        DEFAULT_RENEWAL_WINDOW_DAYS,
+    );
+    const safeRenewalWindowDays =
+      Number.isFinite(renewalWindowDays) && renewalWindowDays >= 0
+        ? renewalWindowDays
+        : DEFAULT_RENEWAL_WINDOW_DAYS;
+
+    const renewalOpensAt = new Date(
+      activeSamePlan.endsAt.getTime() - safeRenewalWindowDays * DAY_MS,
+    );
+    if (now >= renewalOpensAt) {
+      return;
+    }
+
+    throw new BadRequestException({
+      code: 'PLAN_REPURCHASE_BLOCKED',
+      message: `You can renew this plan only in the last ${safeRenewalWindowDays} days before expiry.`,
+      details: {
+        reason: 'ACTIVE_PLAN_EXISTS',
+        endsAt: activeSamePlan.endsAt.toISOString(),
+        renewalOpensAt: renewalOpensAt.toISOString(),
+        renewalWindowDays: safeRenewalWindowDays,
       },
     });
   }

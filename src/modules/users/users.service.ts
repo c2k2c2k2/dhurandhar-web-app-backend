@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   EntitlementKind,
   PracticeEventType,
@@ -10,9 +11,15 @@ import {
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { AdminBlockUserDto, AdminEntitlementDto, AdminUserQueryDto, UpdateMeDto } from './dto';
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_RENEWAL_WINDOW_DAYS = 7;
+
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly configService: ConfigService,
+  ) {}
 
   async getMe(userId?: string) {
     if (!userId) {
@@ -90,6 +97,36 @@ export class UsersService {
       });
     }
 
+    const renewalWindowDays = Number(
+      this.configService.get<number>('SUBSCRIPTION_RENEWAL_WINDOW_DAYS') ??
+        DEFAULT_RENEWAL_WINDOW_DAYS,
+    );
+    const safeRenewalWindowDays =
+      Number.isFinite(renewalWindowDays) && renewalWindowDays >= 0
+        ? renewalWindowDays
+        : DEFAULT_RENEWAL_WINDOW_DAYS;
+
+    const subscriptionPolicy = subscription?.endsAt
+      ? (() => {
+          const diffMs = subscription.endsAt.getTime() - now.getTime();
+          const daysUntilExpiry = Math.max(0, Math.ceil(diffMs / DAY_MS));
+          const renewalOpensAt = new Date(
+            subscription.endsAt.getTime() - safeRenewalWindowDays * DAY_MS,
+          );
+          return {
+            daysUntilExpiry,
+            renewalWindowDays: safeRenewalWindowDays,
+            renewalOpensAt: renewalOpensAt.toISOString(),
+            canRenewCurrentPlan: now >= renewalOpensAt,
+          };
+        })()
+      : {
+          daysUntilExpiry: null,
+          renewalWindowDays: safeRenewalWindowDays,
+          renewalOpensAt: null,
+          canRenewCurrentPlan: false,
+        };
+
     return {
       ...user,
       subscription: subscription
@@ -99,6 +136,7 @@ export class UsersService {
             startsAt: subscription.startsAt,
             endsAt: subscription.endsAt,
             plan: subscription.plan,
+            policy: subscriptionPolicy,
           }
         : null,
       entitlements,

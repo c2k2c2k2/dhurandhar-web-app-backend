@@ -1,4 +1,13 @@
-import { IsBoolean, IsInt, IsObject, IsOptional, IsString, Min } from 'class-validator';
+import {
+  IsBoolean,
+  IsEnum,
+  IsInt,
+  IsObject,
+  IsOptional,
+  IsString,
+  Min,
+} from 'class-validator';
+import { PlanDurationUnit } from './plan-validity.dto';
 
 export class PlanUpdateDto {
   @IsOptional()
@@ -22,6 +31,15 @@ export class PlanUpdateDto {
   @IsInt()
   @Min(1)
   durationDays?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  durationValue?: number;
+
+  @IsOptional()
+  @IsEnum(PlanDurationUnit)
+  durationUnit?: PlanDurationUnit;
 
   @IsOptional()
   @IsBoolean()
