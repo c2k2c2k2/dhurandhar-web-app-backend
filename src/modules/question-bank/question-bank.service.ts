@@ -2,6 +2,10 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { AssetResourceType, FileAssetPurpose, Prisma } from '@prisma/client';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { BulkImportDto, CreateQuestionDto, QuestionQueryDto, UpdateQuestionDto } from './dto';
+import {
+  extractQuestionSearchFragments,
+  sanitizeQuestionContent,
+} from './utils/rich-content.util';
 
 type PrismaWriter = PrismaService | Prisma.TransactionClient;
 
@@ -50,9 +54,19 @@ export class QuestionBankService {
       }
     }
 
-    const statementJson = (dto.statementJson ?? existing.statementJson) as Prisma.InputJsonValue;
-    const optionsJson = (dto.optionsJson ?? existing.optionsJson) as Prisma.InputJsonValue;
-    const explanationJson = (dto.explanationJson ?? existing.explanationJson) as Prisma.InputJsonValue;
+    const statementInput = dto.statementJson
+      ? (sanitizeQuestionContent(dto.statementJson) as Prisma.InputJsonValue)
+      : undefined;
+    const optionsInput = dto.optionsJson
+      ? (sanitizeQuestionContent(dto.optionsJson) as Prisma.InputJsonValue)
+      : undefined;
+    const explanationInput = dto.explanationJson
+      ? (sanitizeQuestionContent(dto.explanationJson) as Prisma.InputJsonValue)
+      : undefined;
+
+    const statementJson = (statementInput ?? existing.statementJson) as Prisma.InputJsonValue;
+    const optionsJson = (optionsInput ?? existing.optionsJson) as Prisma.InputJsonValue;
+    const explanationJson = (explanationInput ?? existing.explanationJson) as Prisma.InputJsonValue;
 
     const assetIds = this.extractAssetIds([statementJson, optionsJson, explanationJson]);
     await this.validateAssets(assetIds);
@@ -71,11 +85,9 @@ export class QuestionBankService {
           topicId: dto.topicId ?? undefined,
           type: dto.type ?? undefined,
           difficulty: dto.difficulty ?? undefined,
-          statementJson: dto.statementJson ? (dto.statementJson as Prisma.InputJsonValue) : undefined,
-          optionsJson: dto.optionsJson ? (dto.optionsJson as Prisma.InputJsonValue) : undefined,
-          explanationJson: dto.explanationJson
-            ? (dto.explanationJson as Prisma.InputJsonValue)
-            : undefined,
+          statementJson: statementInput,
+          optionsJson: optionsInput,
+          explanationJson: explanationInput,
           correctAnswerJson: dto.correctAnswerJson
             ? (dto.correctAnswerJson as Prisma.InputJsonValue)
             : undefined,
@@ -239,11 +251,19 @@ export class QuestionBankService {
       topicName = topic.name;
     }
 
-    const assetIds = this.extractAssetIds([dto.statementJson, dto.optionsJson, dto.explanationJson]);
+    const statementJson = sanitizeQuestionContent(dto.statementJson) as Prisma.InputJsonValue;
+    const optionsJson = dto.optionsJson
+      ? (sanitizeQuestionContent(dto.optionsJson) as Prisma.InputJsonValue)
+      : undefined;
+    const explanationJson = dto.explanationJson
+      ? (sanitizeQuestionContent(dto.explanationJson) as Prisma.InputJsonValue)
+      : undefined;
+
+    const assetIds = this.extractAssetIds([statementJson, optionsJson, explanationJson]);
     await this.validateAssets(assetIds, tx);
 
     const searchText = this.buildSearchText(
-      [dto.statementJson, dto.optionsJson, dto.explanationJson],
+      [statementJson, optionsJson, explanationJson],
       subject.name,
       topicName,
     );
@@ -255,11 +275,9 @@ export class QuestionBankService {
         createdByUserId: userId,
         type: dto.type,
         difficulty: dto.difficulty ?? undefined,
-        statementJson: dto.statementJson as Prisma.InputJsonValue,
-        optionsJson: dto.optionsJson ? (dto.optionsJson as Prisma.InputJsonValue) : undefined,
-        explanationJson: dto.explanationJson
-          ? (dto.explanationJson as Prisma.InputJsonValue)
-          : undefined,
+        statementJson,
+        optionsJson,
+        explanationJson,
         correctAnswerJson: dto.correctAnswerJson
           ? (dto.correctAnswerJson as Prisma.InputJsonValue)
           : undefined,
@@ -285,22 +303,10 @@ export class QuestionBankService {
   }
 
   private buildSearchText(values: unknown[], subjectName?: string, topicName?: string) {
-    const fragments: string[] = [];
-    const walk = (value: unknown) => {
-      if (typeof value === 'string') {
-        fragments.push(value);
-        return;
-      }
-      if (Array.isArray(value)) {
-        value.forEach(walk);
-        return;
-      }
-      if (value && typeof value === 'object') {
-        Object.values(value as Record<string, unknown>).forEach(walk);
-      }
-    };
-    values.forEach(walk);
-    return [...fragments, subjectName, topicName].filter(Boolean).join(' ');
+    const fragments = values.flatMap((value) => extractQuestionSearchFragments(value));
+    return [...fragments, subjectName, topicName]
+      .filter((item): item is string => Boolean(item))
+      .join(' ');
   }
 
   private async refreshQuestionSearchVector(

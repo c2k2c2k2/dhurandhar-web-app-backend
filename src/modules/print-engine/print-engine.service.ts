@@ -15,6 +15,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { MinioService } from '../files/minio.service';
 import { PrismaService } from '../../infra/prisma/prisma.service';
+import { renderQuestionHtmlWithMath } from '../question-bank/utils/rich-content.util';
 import {
   PrintJobCreateDto,
   PrintJobQueryDto,
@@ -58,10 +59,15 @@ const DEFAULT_PAPER_TEMPLATE = `<!DOCTYPE html>
       .subtitle { margin: 0 0 16px 0; color: #555; }
       .question { margin-bottom: 14px; }
       .statement p { margin: 0 0 8px 0; }
+      .statement table { width: 100%; border-collapse: collapse; margin: 8px 0; }
+      .statement table th, .statement table td { border: 1px solid #cbd5e1; padding: 6px 8px; vertical-align: top; }
+      .statement table th { background: #f8fafc; }
       .options { margin: 0; padding-left: 18px; }
       .options li { margin-bottom: 6px; }
       img { max-width: 100%; height: auto; }
       .page-break { page-break-before: always; }
+      .question-math-block { margin: 8px 0; }
+      {{katexStyles}}
     </style>
   </head>
   <body>
@@ -102,6 +108,7 @@ export class PrintEngineService {
   private readonly useFakePdf: boolean;
   private readonly paperTemplate: string;
   private readonly answerTemplate: string;
+  private readonly katexStyles: string;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -126,6 +133,7 @@ export class PrintEngineService {
       'answer-key.html',
       DEFAULT_ANSWER_TEMPLATE,
     );
+    this.katexStyles = this.loadKatexStyles();
   }
 
   // BullMQ worker is managed via @nestjs/bullmq Processor.
@@ -442,6 +450,7 @@ export class PrintEngineService {
       title: this.escapeHtml(title),
       subtitle: this.escapeHtml(subtitle),
       content: questionsHtml,
+      katexStyles: this.katexStyles,
     });
 
     if (!config.includeAnswerKey) {
@@ -536,12 +545,16 @@ export class PrintEngineService {
       const assetId =
         (obj.imageAssetId as string | undefined) ??
         (obj.assetId as string | undefined);
+      const richHtml = typeof obj.html === 'string' ? obj.html : undefined;
       const text = typeof obj.text === 'string' ? obj.text : undefined;
       const blocks = obj.blocks;
 
       let html = '';
-      if (text) {
-        html += `<p>${this.escapeHtml(text)}</p>`;
+      if (richHtml) {
+        html += this.renderRichHtml(richHtml);
+      } else if (text) {
+        const legacyMathHtml = this.renderLegacyMathFromText(text);
+        html += legacyMathHtml || `<p>${this.escapeHtml(text)}</p>`;
       }
       if (assetId) {
         const src = assets.get(assetId);
@@ -565,6 +578,31 @@ export class PrintEngineService {
     }
 
     return '';
+  }
+
+  private renderRichHtml(value: string) {
+    return renderQuestionHtmlWithMath(value);
+  }
+
+  private renderLegacyMathFromText(value: string) {
+    const hasMathPlaceholder =
+      /(?:<|&lt;)(span|div)[^>]*data-question-math-(inline|block)\s*=/i.test(
+        value,
+      );
+    if (!hasMathPlaceholder) {
+      return '';
+    }
+    const source = value.includes('&lt;') ? this.decodeHtmlEntities(value) : value;
+    return this.renderRichHtml(source);
+  }
+
+  private decodeHtmlEntities(value: string) {
+    return value
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&amp;/g, '&');
   }
 
   private async buildAssetMap(questions: any[]) {
@@ -927,6 +965,16 @@ export class PrintEngineService {
     }
 
     return fallback;
+  }
+
+  private loadKatexStyles() {
+    try {
+      const cssPath = require.resolve('katex/dist/katex.min.css');
+      return readFileSync(cssPath, 'utf8');
+    } catch {
+      this.logger.warn('Unable to load KaTeX CSS for print rendering.');
+      return '';
+    }
   }
 
   private escapeHtml(value: string) {
