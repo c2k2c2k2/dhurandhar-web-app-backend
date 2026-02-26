@@ -140,10 +140,22 @@ export class QuestionBankService {
       isPublished: query.isPublished ? query.isPublished === 'true' : undefined,
     };
 
-    return this.prisma.question.findMany({
+    const questions = await this.prisma.question.findMany({
       where,
       orderBy: { updatedAt: 'desc' },
+      include: {
+        topic: {
+          select: {
+            name: true,
+          },
+        },
+      },
     });
+
+    return questions.map(({ topic, ...question }) => ({
+      ...question,
+      topicName: topic?.name ?? null,
+    }));
   }
 
   async listQuestions(query: QuestionQueryDto) {

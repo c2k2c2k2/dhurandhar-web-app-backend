@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   PracticeEventType,
   PracticeMode,
@@ -10,7 +14,6 @@ import { PrismaService } from '../../infra/prisma/prisma.service';
 import {
   PracticeAnswerBatchDto,
   PracticeAnswerDto,
-  PracticeQueryDto,
   PracticeStartDto,
 } from './dto';
 
@@ -32,7 +35,9 @@ export class PracticeService {
         subjectId: dto.subjectId ?? undefined,
         topicId: dto.topicId ?? undefined,
         mode: dto.mode ?? PracticeMode.PRACTICE,
-        configJson: dto.configJson ? (dto.configJson as Prisma.InputJsonValue) : undefined,
+        configJson: dto.configJson
+          ? (dto.configJson as Prisma.InputJsonValue)
+          : undefined,
         status: PracticeSessionStatus.ACTIVE,
       },
     });
@@ -41,7 +46,9 @@ export class PracticeService {
   }
 
   async endPractice(userId: string, sessionId: string) {
-    const session = await this.prisma.practiceSession.findUnique({ where: { id: sessionId } });
+    const session = await this.prisma.practiceSession.findUnique({
+      where: { id: sessionId },
+    });
     if (!session || session.userId !== userId) {
       throw new NotFoundException({
         code: 'PRACTICE_SESSION_NOT_FOUND',
@@ -59,7 +66,11 @@ export class PracticeService {
     });
   }
 
-  async getNextQuestions(userId: string, sessionId: string, countOverride?: number) {
+  async getNextQuestions(
+    userId: string,
+    sessionId: string,
+    countOverride?: number,
+  ) {
     const session = await this.prisma.practiceSession.findUnique({
       where: { id: sessionId },
     });
@@ -105,11 +116,19 @@ export class PracticeService {
     };
   }
 
-  async recordAnswer(userId: string, sessionId: string, dto: PracticeAnswerDto) {
+  async recordAnswer(
+    userId: string,
+    sessionId: string,
+    dto: PracticeAnswerDto,
+  ) {
     return this.recordAnswersBatch(userId, sessionId, { items: [dto] });
   }
 
-  async recordAnswersBatch(userId: string, sessionId: string, dto: PracticeAnswerBatchDto) {
+  async recordAnswersBatch(
+    userId: string,
+    sessionId: string,
+    dto: PracticeAnswerBatchDto,
+  ) {
     const session = await this.prisma.practiceSession.findUnique({
       where: { id: sessionId },
     });
@@ -123,12 +142,23 @@ export class PracticeService {
     const questionIds = dto.items.map((item) => item.questionId);
     const questions = await this.prisma.question.findMany({
       where: { id: { in: questionIds } },
-      select: { id: true, subjectId: true, topicId: true, correctAnswerJson: true },
+      select: {
+        id: true,
+        subjectId: true,
+        topicId: true,
+        correctAnswerJson: true,
+      },
     });
     const questionMap = new Map(questions.map((q) => [q.id, q]));
 
     const now = new Date();
     const events: Prisma.PracticeQuestionEventCreateManyInput[] = [];
+    const results: Array<{
+      questionId: string;
+      eventType: PracticeEventType;
+      isCorrect: boolean | null;
+      correctAnswerJson: Prisma.JsonValue;
+    }> = [];
     const questionStateUpdates: Array<Prisma.PrismaPromise<unknown>> = [];
     const topicProgressUpdates: Array<Prisma.PrismaPromise<unknown>> = [];
 
@@ -151,11 +181,23 @@ export class PracticeService {
         questionId: question.id,
         eventType,
         isCorrect: isCorrect ?? undefined,
-        payloadJson: item.answerJson ? (item.answerJson as Prisma.InputJsonValue) : undefined,
+        payloadJson: item.answerJson
+          ? (item.answerJson as Prisma.InputJsonValue)
+          : undefined,
         createdAt: now,
       });
 
-      if (eventType === PracticeEventType.ANSWERED && typeof isCorrect === 'boolean') {
+      results.push({
+        questionId: question.id,
+        eventType,
+        isCorrect: typeof isCorrect === 'boolean' ? isCorrect : null,
+        correctAnswerJson: question.correctAnswerJson ?? null,
+      });
+
+      if (
+        eventType === PracticeEventType.ANSWERED &&
+        typeof isCorrect === 'boolean'
+      ) {
         questionStateUpdates.push(
           this.prisma.userQuestionState.upsert({
             where: { userId_questionId: { userId, questionId: question.id } },
@@ -202,7 +244,7 @@ export class PracticeService {
       ...topicProgressUpdates,
     ]);
 
-    return { success: true };
+    return { success: true, results };
   }
 
   async getProgress(userId: string) {
@@ -265,7 +307,10 @@ export class PracticeService {
       },
     });
 
-    const buckets = new Map<string, { date: string; total: number; correct: number }>();
+    const buckets = new Map<
+      string,
+      { date: string; total: number; correct: number }
+    >();
     events.forEach((event) => {
       const date = event.createdAt.toISOString().slice(0, 10);
       const bucket = buckets.get(date) ?? { date, total: 0, correct: 0 };
@@ -276,7 +321,9 @@ export class PracticeService {
       buckets.set(date, bucket);
     });
 
-    return Array.from(buckets.values()).sort((a, b) => a.date.localeCompare(b.date));
+    return Array.from(buckets.values()).sort((a, b) =>
+      a.date.localeCompare(b.date),
+    );
   }
 
   private async selectQuestions(
@@ -369,7 +416,9 @@ export class PracticeService {
   }
 
   private async assertSubjectExists(subjectId: string) {
-    const subject = await this.prisma.subject.findUnique({ where: { id: subjectId } });
+    const subject = await this.prisma.subject.findUnique({
+      where: { id: subjectId },
+    });
     if (!subject) {
       throw new BadRequestException({
         code: 'SUBJECT_NOT_FOUND',
@@ -379,7 +428,9 @@ export class PracticeService {
   }
 
   private async assertTopicExists(topicId: string, subjectId?: string) {
-    const topic = await this.prisma.topic.findUnique({ where: { id: topicId } });
+    const topic = await this.prisma.topic.findUnique({
+      where: { id: topicId },
+    });
     if (!topic) {
       throw new BadRequestException({
         code: 'TOPIC_NOT_FOUND',
