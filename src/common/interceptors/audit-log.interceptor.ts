@@ -1,4 +1,9 @@
-import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nestjs/common';
+import {
+  CallHandler,
+  ExecutionContext,
+  Injectable,
+  NestInterceptor,
+} from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { Request } from 'express';
 import { Observable, tap } from 'rxjs';
@@ -18,10 +23,10 @@ export class AuditLogInterceptor implements NestInterceptor {
       return next.handle();
     }
 
-    const auditMeta = this.reflector.getAllAndOverride<AuditMeta | undefined>(AUDIT_META_KEY, [
-      context.getHandler(),
-      context.getClass(),
-    ]);
+    const auditMeta = this.reflector.getAllAndOverride<AuditMeta | undefined>(
+      AUDIT_META_KEY,
+      [context.getHandler(), context.getClass()],
+    );
 
     if (!auditMeta) {
       return next.handle();
@@ -31,12 +36,15 @@ export class AuditLogInterceptor implements NestInterceptor {
     const actorUserId = request.user?.userId;
     const resourceParam =
       request.params?.userId ??
+      request.params?.roleId ??
       request.params?.noteId ??
       request.params?.topicId ??
       request.params?.subjectId ??
       request.params?.id ??
       null;
-    const resourceId = Array.isArray(resourceParam) ? resourceParam[0] : resourceParam;
+    const resourceId = Array.isArray(resourceParam)
+      ? resourceParam[0]
+      : resourceParam;
 
     return next.handle().pipe(
       tap(() => {

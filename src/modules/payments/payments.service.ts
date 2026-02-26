@@ -7,6 +7,8 @@ import {
 import { ConfigService } from '@nestjs/config';
 import {
   CouponType,
+  PaymentMandateStatus,
+  PaymentOrderFlow,
   PaymentOrderStatus,
   PaymentTransactionStatus,
   Prisma,
@@ -14,13 +16,20 @@ import {
 } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../../infra/prisma/prisma.service';
-import { CheckoutDto, PaymentOrderQueryDto, PaymentRefundDto } from './dto';
+import {
+  CheckoutDto,
+  CheckoutPreviewDto,
+  PaymentOrderQueryDto,
+  PaymentRefundDto,
+} from './dto';
 import { PhonepeService } from './phonepe/phonepe.service';
 import { SubscriptionsService } from './subscriptions.service';
 import { NotificationsService } from '../notifications/notifications.service';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RENEWAL_WINDOW_DAYS = 7;
+const DEFAULT_AUTOPAY_MANDATE_VALIDITY_DAYS = 3650;
+const DEFAULT_AUTOPAY_RETRY_MINUTES = 60;
 
 @Injectable()
 export class PaymentsService {
@@ -39,6 +48,55 @@ export class PaymentsService {
     private readonly configService: ConfigService,
     private readonly notificationsService: NotificationsService,
   ) {}
+
+  async previewCheckout(userId: string | undefined, dto: CheckoutPreviewDto) {
+    if (!userId) {
+      throw new UnauthorizedException({
+        code: 'AUTH_UNAUTHORIZED',
+        message: 'Unauthorized.',
+      });
+    }
+
+    const plan = await this.prisma.plan.findUnique({
+      where: { id: dto.planId },
+    });
+    if (!plan || !plan.isActive) {
+      throw new NotFoundException({
+        code: 'PLAN_NOT_FOUND',
+        message: 'Plan not found.',
+      });
+    }
+
+    const now = new Date();
+    await this.assertPlanPurchaseAllowed(userId, plan.id, now);
+
+    const coupon = dto.couponCode
+      ? await this.resolveCoupon(userId, dto.couponCode, plan.pricePaise)
+      : null;
+    const finalAmountPaise = coupon ? coupon.finalAmountPaise : plan.pricePaise;
+    const autoPay = this.resolveAutoPayDetails(plan, dto.enableAutoPay === true);
+
+    return {
+      plan: {
+        id: plan.id,
+        key: plan.key,
+        name: plan.name,
+        tier: plan.tier,
+        durationDays: plan.durationDays,
+        validity: this.extractPlanValidity(plan),
+      },
+      baseAmountPaise: plan.pricePaise,
+      discountPaise: coupon?.discountPaise ?? 0,
+      finalAmountPaise,
+      coupon: coupon
+        ? {
+            code: dto.couponCode?.trim().toUpperCase() ?? '',
+            discountPaise: coupon.discountPaise,
+          }
+        : null,
+      autoPay,
+    };
+  }
 
   async checkout(
     userId: string | undefined,
@@ -64,6 +122,16 @@ export class PaymentsService {
 
     const now = new Date();
     await this.assertPlanPurchaseAllowed(userId, plan.id, now);
+    const autoPay = this.resolveAutoPayDetails(plan, dto.enableAutoPay === true);
+    if (autoPay.requested && !autoPay.eligible) {
+      throw new BadRequestException({
+        code: 'AUTOPAY_NOT_AVAILABLE',
+        message: autoPay.message,
+      });
+    }
+    const orderFlow = autoPay.requested
+      ? PaymentOrderFlow.AUTOPAY_SETUP
+      : PaymentOrderFlow.ONE_TIME;
 
     const expiresMinutes =
       this.configService.get<number>('PENDING_ORDER_EXPIRE_MINUTES') ?? 30;
@@ -74,6 +142,7 @@ export class PaymentsService {
         where: {
           userId,
           idempotencyKey,
+          flow: orderFlow,
           status: {
             in: [PaymentOrderStatus.CREATED, PaymentOrderStatus.PENDING],
           },
@@ -90,6 +159,10 @@ export class PaymentsService {
             merchantTransactionId: existing.merchantTransactionId,
             orderId: existing.id,
             amountPaise: existing.finalAmountPaise,
+            flow: existing.flow,
+            autoPay: {
+              enabled: existing.flow === PaymentOrderFlow.AUTOPAY_SETUP,
+            },
           };
         }
       }
@@ -99,6 +172,7 @@ export class PaymentsService {
       where: {
         userId,
         planId: plan.id,
+        flow: orderFlow,
         status: {
           in: [PaymentOrderStatus.CREATED, PaymentOrderStatus.PENDING],
         },
@@ -117,6 +191,10 @@ export class PaymentsService {
           merchantTransactionId: reusable.merchantTransactionId,
           orderId: reusable.id,
           amountPaise: reusable.finalAmountPaise,
+          flow: reusable.flow,
+          autoPay: {
+            enabled: reusable.flow === PaymentOrderFlow.AUTOPAY_SETUP,
+          },
         };
       }
     }
@@ -137,11 +215,13 @@ export class PaymentsService {
         amountPaise: plan.pricePaise,
         finalAmountPaise,
         status: PaymentOrderStatus.CREATED,
+        flow: orderFlow,
         idempotencyKey: idempotencyKey ?? undefined,
         expiresAt,
         metadataJson: {
           couponCode: dto.couponCode,
           discountPaise: coupon?.discountPaise ?? 0,
+          autoPay,
         } as Prisma.InputJsonValue,
       },
     });
@@ -154,43 +234,113 @@ export class PaymentsService {
       });
     }
 
-    const paymentMessage = this.configService.get<string>(
-      'PHONEPE_PAYMENT_MESSAGE',
+    const checkoutRedirectUrl = this.buildRedirectUrl(
+      redirectUrl,
+      order.merchantTransactionId,
     );
-    const disablePaymentRetry =
-      this.configService.get<boolean>('PHONEPE_DISABLE_PAYMENT_RETRY') ?? false;
 
-    const payload = {
-      merchantOrderId: order.merchantTransactionId,
-      amount: order.finalAmountPaise,
-      redirectUrl: this.buildRedirectUrl(
-        redirectUrl,
-        order.merchantTransactionId,
-      ),
-      message: paymentMessage,
-      expireAfterSeconds: expiresMinutes * 60,
-      disablePaymentRetry,
-    };
+    let payUrl = '';
+    if (order.flow === PaymentOrderFlow.AUTOPAY_SETUP) {
+      const merchantSubscriptionId = this.buildMerchantSubscriptionId(
+        userId,
+        plan.id,
+      );
+      const mandateValidityDays = Number(
+        this.configService.get<number>(
+          'PHONEPE_SUBSCRIPTION_MANDATE_VALIDITY_DAYS',
+        ) ?? DEFAULT_AUTOPAY_MANDATE_VALIDITY_DAYS,
+      );
+      const mandateExpireAt = new Date(
+        now.getTime() + Math.max(30, mandateValidityDays) * DAY_MS,
+      );
 
-    const { redirectUrl: payUrl } =
-      await this.phonepeService.initiatePayment(payload);
+      const setupResponse = await this.phonepeService.setupSubscription({
+        merchantOrderId: order.merchantTransactionId,
+        amount: order.finalAmountPaise,
+        redirectUrl: checkoutRedirectUrl,
+        cancelRedirectUrl: checkoutRedirectUrl,
+        expireAfterSeconds: expiresMinutes * 60,
+        merchantSubscriptionId,
+        authWorkflowType:
+          this.configService.get<string>(
+            'PHONEPE_SUBSCRIPTION_AUTH_WORKFLOW_TYPE',
+          ) ?? 'TRANSACTION',
+        amountType:
+          this.configService.get<string>('PHONEPE_SUBSCRIPTION_AMOUNT_TYPE') ??
+          'FIXED',
+        maxAmount: plan.pricePaise,
+        frequency:
+          this.configService.get<string>('PHONEPE_SUBSCRIPTION_FREQUENCY') ??
+          'ON_DEMAND',
+        expireAt: mandateExpireAt.getTime(),
+        metaInfo: {
+          udf1: plan.id,
+          udf2: plan.key,
+        },
+      });
 
-    await this.prisma.paymentOrder.update({
-      where: { id: order.id },
-      data: {
-        status: PaymentOrderStatus.PENDING,
-        metadataJson: {
-          ...(order.metadataJson as Record<string, unknown> | undefined),
-          redirectUrl: payUrl,
-        } as Prisma.InputJsonValue,
-      },
-    });
+      if (!setupResponse.redirectUrl) {
+        throw new BadRequestException({
+          code: 'PHONEPE_REDIRECT_MISSING',
+          message: 'PhonePe subscription setup redirect URL missing.',
+          details: setupResponse,
+        });
+      }
+      payUrl = setupResponse.redirectUrl;
+
+      await this.prisma.paymentOrder.update({
+        where: { id: order.id },
+        data: {
+          status: PaymentOrderStatus.PENDING,
+          metadataJson: {
+            ...(order.metadataJson as Record<string, unknown> | undefined),
+            redirectUrl: payUrl,
+            merchantSubscriptionId,
+            mandateExpireAt: mandateExpireAt.toISOString(),
+          } as Prisma.InputJsonValue,
+        },
+      });
+    } else {
+      const paymentMessage = this.configService.get<string>(
+        'PHONEPE_PAYMENT_MESSAGE',
+      );
+      const disablePaymentRetry =
+        this.configService.get<boolean>('PHONEPE_DISABLE_PAYMENT_RETRY') ??
+        false;
+
+      const payload = {
+        merchantOrderId: order.merchantTransactionId,
+        amount: order.finalAmountPaise,
+        redirectUrl: checkoutRedirectUrl,
+        message: paymentMessage,
+        expireAfterSeconds: expiresMinutes * 60,
+        disablePaymentRetry,
+      };
+
+      const standardResponse = await this.phonepeService.initiatePayment(payload);
+      payUrl = standardResponse.redirectUrl;
+
+      await this.prisma.paymentOrder.update({
+        where: { id: order.id },
+        data: {
+          status: PaymentOrderStatus.PENDING,
+          metadataJson: {
+            ...(order.metadataJson as Record<string, unknown> | undefined),
+            redirectUrl: payUrl,
+          } as Prisma.InputJsonValue,
+        },
+      });
+    }
 
     return {
       redirectUrl: payUrl,
       merchantTransactionId: order.merchantTransactionId,
       orderId: order.id,
       amountPaise: order.finalAmountPaise,
+      flow: order.flow,
+      autoPay: {
+        enabled: order.flow === PaymentOrderFlow.AUTOPAY_SETUP,
+      },
     };
   }
 
@@ -553,6 +703,315 @@ export class PaymentsService {
     return { reconciled: orders.length };
   }
 
+  async processDueAutoPayCharges(limit = 10) {
+    const now = new Date();
+    const mandates = await this.prisma.paymentMandate.findMany({
+      where: {
+        status: PaymentMandateStatus.ACTIVE,
+        nextChargeAt: { lte: now },
+      },
+      orderBy: { nextChargeAt: 'asc' },
+      take: limit,
+      include: {
+        plan: {
+          select: {
+            id: true,
+            key: true,
+            name: true,
+            durationDays: true,
+            pricePaise: true,
+            metadataJson: true,
+          },
+        },
+        user: {
+          select: {
+            id: true,
+            email: true,
+            fullName: true,
+          },
+        },
+      },
+    });
+
+    let initiated = 0;
+    for (const mandate of mandates) {
+      try {
+        const started = await this.initiateAutoPayChargeForMandate(mandate, now);
+        if (started) {
+          initiated += 1;
+        }
+      } catch (error) {
+        void error;
+      }
+    }
+
+    return { scanned: mandates.length, initiated };
+  }
+
+  async sendAutoPayRenewalReminders(limit = 40) {
+    const reminderHours = Number(
+      this.configService.get<number>('PAYMENTS_AUTOPAY_REMINDER_HOURS') ?? 24,
+    );
+    const safeReminderHours =
+      Number.isFinite(reminderHours) && reminderHours > 0 ? reminderHours : 24;
+
+    const now = new Date();
+    const until = new Date(now.getTime() + safeReminderHours * 60 * 60 * 1000);
+    const mandates = await this.prisma.paymentMandate.findMany({
+      where: {
+        status: PaymentMandateStatus.ACTIVE,
+        nextChargeAt: { gte: now, lte: until },
+      },
+      orderBy: { nextChargeAt: 'asc' },
+      take: limit,
+      include: {
+        plan: { select: { name: true } },
+        user: { select: { id: true, email: true, fullName: true } },
+      },
+    });
+
+    let notified = 0;
+    for (const mandate of mandates) {
+      if (!mandate.user.email || !mandate.nextChargeAt) {
+        continue;
+      }
+
+      const metadata = (mandate.metadataJson ?? {}) as Record<string, unknown>;
+      const reminderKey = mandate.nextChargeAt.toISOString();
+      if (metadata.lastReminderFor === reminderKey) {
+        continue;
+      }
+
+      this.notificationsService
+        .sendAutopayRenewalReminderEmail({
+          userId: mandate.user.id,
+          email: mandate.user.email,
+          planName: mandate.plan.name,
+          amountPaise: mandate.amountPaise,
+          chargeAt: mandate.nextChargeAt,
+        })
+        .catch(() => undefined);
+
+      await this.prisma.paymentMandate.update({
+        where: { id: mandate.id },
+        data: {
+          metadataJson: this.toJsonValue({
+            ...(metadata ?? {}),
+            lastReminderFor: reminderKey,
+          }),
+        },
+      });
+      notified += 1;
+    }
+
+    return { scanned: mandates.length, notified };
+  }
+
+  private async initiateAutoPayChargeForMandate(
+    mandate: {
+      id: string;
+      userId: string;
+      planId: string;
+      merchantSubscriptionId: string;
+      providerSubscriptionId: string | null;
+      amountPaise: number;
+      nextChargeAt: Date | null;
+      metadataJson: Prisma.JsonValue | null;
+      user: { id: string; email: string | null; fullName: string | null };
+      plan: {
+        id: string;
+        key: string;
+        name: string;
+        durationDays: number;
+        pricePaise: number;
+        metadataJson: Prisma.JsonValue | null;
+      };
+    },
+    now: Date,
+  ) {
+    const existingPending = await this.prisma.paymentOrder.findFirst({
+      where: {
+        mandateId: mandate.id,
+        flow: PaymentOrderFlow.AUTOPAY_CHARGE,
+        status: {
+          in: [PaymentOrderStatus.CREATED, PaymentOrderStatus.PENDING],
+        },
+      },
+      select: { id: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (existingPending) {
+      return false;
+    }
+
+    const expiresMinutes =
+      this.configService.get<number>('PENDING_ORDER_EXPIRE_MINUTES') ?? 30;
+    const expiresAt = new Date(now.getTime() + expiresMinutes * 60 * 1000);
+    const scheduledFor = mandate.nextChargeAt ?? now;
+    const retryMinutes = Number(
+      this.configService.get<number>('PAYMENTS_AUTOPAY_RETRY_MINUTES') ??
+        DEFAULT_AUTOPAY_RETRY_MINUTES,
+    );
+    const safeRetryMinutes =
+      Number.isFinite(retryMinutes) && retryMinutes > 0
+        ? retryMinutes
+        : DEFAULT_AUTOPAY_RETRY_MINUTES;
+
+    const order = await this.prisma.paymentOrder.create({
+      data: {
+        userId: mandate.userId,
+        planId: mandate.planId,
+        mandateId: mandate.id,
+        merchantTransactionId: randomUUID(),
+        merchantUserId: mandate.userId,
+        amountPaise: mandate.amountPaise,
+        finalAmountPaise: mandate.amountPaise,
+        status: PaymentOrderStatus.CREATED,
+        flow: PaymentOrderFlow.AUTOPAY_CHARGE,
+        expiresAt,
+        metadataJson: this.toJsonValue({
+          scheduledFor: scheduledFor.toISOString(),
+          autoPay: {
+            mandateId: mandate.id,
+            merchantSubscriptionId: mandate.merchantSubscriptionId,
+            providerSubscriptionId:
+              mandate.providerSubscriptionId ?? mandate.merchantSubscriptionId,
+          },
+        }),
+      },
+    });
+
+    await this.prisma.paymentMandate.update({
+      where: { id: mandate.id },
+      data: {
+        nextChargeAt: new Date(now.getTime() + safeRetryMinutes * 60 * 1000),
+      },
+    });
+
+    const merchantSubscriptionId = mandate.merchantSubscriptionId;
+    const notifyBeforeExecute =
+      this.configService.get<boolean>('PHONEPE_SUBSCRIPTION_NOTIFY_BEFORE_EXECUTE') ??
+      true;
+    if (notifyBeforeExecute) {
+      try {
+        const notifyResponse = await this.phonepeService.notifySubscriptionRedemption(
+          {
+            merchantSubscriptionId,
+            merchantOrderId: order.merchantTransactionId,
+            amount: order.finalAmountPaise,
+            expireAt: expiresAt.getTime(),
+            metaInfo: {
+              udf1: order.id,
+              udf2: mandate.id,
+            },
+          },
+        );
+
+        await this.prisma.paymentEvent.create({
+          data: {
+            orderId: order.id,
+            providerEventId:
+              (notifyResponse.orderId as string | undefined) ??
+              order.merchantTransactionId,
+            eventType: 'PHONEPE_AUTOPAY_NOTIFY',
+            payloadJson: this.toJsonValue(notifyResponse),
+            processedAt: new Date(),
+          },
+        });
+      } catch (error) {
+        await this.prisma.paymentEvent.create({
+          data: {
+            orderId: order.id,
+            providerEventId: order.merchantTransactionId,
+            eventType: 'PHONEPE_AUTOPAY_NOTIFY_FAILED',
+            payloadJson: this.toJsonValue({
+              message: (error as { message?: string } | undefined)?.message,
+            }),
+            processedAt: new Date(),
+          },
+        });
+      }
+    }
+
+    const executeResponse = await this.phonepeService.executeSubscriptionRedemption(
+      {
+        merchantOrderId: order.merchantTransactionId,
+      },
+    );
+
+    await this.prisma.paymentEvent.create({
+      data: {
+        orderId: order.id,
+        providerEventId:
+          (executeResponse.orderId as string | undefined) ??
+          executeResponse.paymentDetails?.[0]?.transactionId ??
+          order.merchantTransactionId,
+        eventType: 'PHONEPE_AUTOPAY_EXECUTE',
+        payloadJson: this.toJsonValue(executeResponse),
+        processedAt: new Date(),
+      },
+    });
+
+    const normalized = this.normalizeStatus(executeResponse);
+    const nextStatus = this.applyTransition(
+      PaymentOrderStatus.CREATED,
+      normalized.orderStatus,
+    );
+
+    await this.prisma.paymentOrder.update({
+      where: { id: order.id },
+      data: {
+        status: nextStatus,
+        finalAmountPaise: normalized.amountPaise ?? order.finalAmountPaise,
+        completedAt:
+          nextStatus === PaymentOrderStatus.SUCCESS ||
+          nextStatus === PaymentOrderStatus.FAILED ||
+          nextStatus === PaymentOrderStatus.EXPIRED ||
+          nextStatus === PaymentOrderStatus.CANCELLED ||
+          nextStatus === PaymentOrderStatus.REFUNDED
+            ? new Date()
+            : undefined,
+      },
+    });
+    await this.upsertTransaction(order.id, normalized, executeResponse);
+
+    if (
+      nextStatus === PaymentOrderStatus.SUCCESS ||
+      nextStatus === PaymentOrderStatus.FAILED ||
+      nextStatus === PaymentOrderStatus.EXPIRED ||
+      nextStatus === PaymentOrderStatus.CANCELLED
+    ) {
+      const updatedOrder = await this.prisma.paymentOrder.findUnique({
+        where: { id: order.id },
+        include: {
+          subscription: true,
+          user: { select: { id: true, email: true, fullName: true } },
+          plan: {
+            select: {
+              id: true,
+              key: true,
+              name: true,
+              durationDays: true,
+              pricePaise: true,
+              metadataJson: true,
+            },
+          },
+          mandate: true,
+        },
+      });
+
+      if (updatedOrder) {
+        if (nextStatus === PaymentOrderStatus.SUCCESS) {
+          await this.handleAutoPayChargeSuccess(updatedOrder);
+        } else {
+          await this.handleAutoPayChargeFailure(updatedOrder);
+        }
+      }
+    }
+
+    return true;
+  }
+
   private async refreshOrderStatusByMerchant(merchantTransactionId: string) {
     const order = await this.prisma.paymentOrder.findUnique({
       where: { merchantTransactionId },
@@ -572,7 +1031,10 @@ export class PaymentsService {
   ) {
     const order = await this.prisma.paymentOrder.findUnique({
       where: { id: orderId },
-      include: { subscription: true },
+      include: {
+        subscription: true,
+        mandate: true,
+      },
     });
     if (!order) {
       throw new NotFoundException({
@@ -585,9 +1047,16 @@ export class PaymentsService {
       return order;
     }
 
-    const statusResponse = await this.phonepeService.checkStatus(
-      merchantTransactionId,
-    );
+    const statusResponse =
+      order.flow === PaymentOrderFlow.AUTOPAY_SETUP
+        ? await this.phonepeService.checkSubscriptionSetupStatus(
+            merchantTransactionId,
+          )
+        : order.flow === PaymentOrderFlow.AUTOPAY_CHARGE
+          ? await this.phonepeService.checkSubscriptionRedemptionStatus(
+              merchantTransactionId,
+            )
+          : await this.phonepeService.checkStatus(merchantTransactionId);
     const normalized = this.normalizeStatus(statusResponse);
     const nextStatus = this.applyTransition(
       order.status,
@@ -611,69 +1080,381 @@ export class PaymentsService {
       include: {
         subscription: true,
         user: { select: { id: true, email: true, fullName: true } },
-        plan: { select: { id: true, name: true } },
+        plan: {
+          select: {
+            id: true,
+            key: true,
+            name: true,
+            durationDays: true,
+            pricePaise: true,
+            metadataJson: true,
+          },
+        },
+        mandate: true,
       },
     });
 
     await this.upsertTransaction(order.id, normalized, statusResponse);
 
-    if (nextStatus === PaymentOrderStatus.SUCCESS && updated.user?.email) {
-      this.notificationsService
-        .sendPaymentSuccessEmail({
-          userId: updated.user.id,
-          email: updated.user.email,
-          amountPaise: updated.finalAmountPaise,
-          planName: updated.plan?.name,
-          orderId: updated.id,
-        })
-        .catch(() => undefined);
-    }
-
-    let activatedSubscription = updated.subscription;
-    if (
-      nextStatus === PaymentOrderStatus.SUCCESS &&
-      !updated.subscription &&
-      updated.planId
-    ) {
-      try {
-        activatedSubscription =
-          await this.subscriptionsService.activateSubscription(
-            updated.userId,
-            updated.planId,
-            updated.id,
-          );
-      } catch (error) {
-        // Let the caller retry via status endpoint or webhook; don't mask payment status.
-        void error;
+    if (nextStatus === PaymentOrderStatus.SUCCESS) {
+      if (updated.flow === PaymentOrderFlow.AUTOPAY_SETUP) {
+        await this.handleAutoPaySetupSuccess(
+          updated,
+          statusResponse as unknown as Record<string, unknown>,
+        );
+      } else if (updated.flow === PaymentOrderFlow.AUTOPAY_CHARGE) {
+        await this.handleAutoPayChargeSuccess(updated);
+      } else {
+        await this.handleOneTimeOrderSuccess(updated);
       }
+    } else if (
+      updated.flow === PaymentOrderFlow.AUTOPAY_CHARGE &&
+      (nextStatus === PaymentOrderStatus.FAILED ||
+        nextStatus === PaymentOrderStatus.EXPIRED ||
+        nextStatus === PaymentOrderStatus.CANCELLED)
+    ) {
+      await this.handleAutoPayChargeFailure(updated);
     }
 
     if (
       nextStatus === PaymentOrderStatus.SUCCESS &&
-      activatedSubscription &&
-      updated.user?.email
+      updated.couponId &&
+      updated.flow !== PaymentOrderFlow.AUTOPAY_CHARGE
     ) {
-      this.notificationsService
-        .sendSubscriptionActivatedEmail({
-          userId: updated.user.id,
-          email: updated.user.email,
-          planName: updated.plan?.name,
-          endsAt: activatedSubscription.endsAt ?? null,
-        })
-        .catch(() => undefined);
-    }
-
-    if (nextStatus === PaymentOrderStatus.SUCCESS && updated.couponId) {
       await this.redeemCoupon(updated.id, updated.userId, updated.couponId);
     }
 
     return updated;
   }
 
+  private async handleOneTimeOrderSuccess(order: {
+    id: string;
+    userId: string;
+    planId: string | null;
+    finalAmountPaise: number;
+    subscription?: { id: string; endsAt: Date | null } | null;
+    user?: { id: string; email: string | null; fullName: string | null } | null;
+    plan?: { id: string; name: string; durationDays: number } | null;
+  }) {
+    if (order.user?.email) {
+      this.notificationsService
+        .sendPaymentSuccessEmail({
+          userId: order.user.id,
+          email: order.user.email,
+          amountPaise: order.finalAmountPaise,
+          planName: order.plan?.name,
+          orderId: order.id,
+        })
+        .catch(() => undefined);
+    }
+
+    let activatedSubscription = order.subscription;
+    if (!activatedSubscription && order.planId) {
+      try {
+        activatedSubscription = await this.subscriptionsService.activateSubscription(
+          order.userId,
+          order.planId,
+          order.id,
+        );
+      } catch (error) {
+        void error;
+      }
+    }
+
+    if (activatedSubscription && order.user?.email) {
+      this.notificationsService
+        .sendSubscriptionActivatedEmail({
+          userId: order.user.id,
+          email: order.user.email,
+          planName: order.plan?.name,
+          endsAt: activatedSubscription.endsAt ?? null,
+        })
+        .catch(() => undefined);
+    }
+  }
+
+  private async handleAutoPaySetupSuccess(
+    order: {
+      id: string;
+      userId: string;
+      planId: string | null;
+      mandateId: string | null;
+      finalAmountPaise: number;
+      metadataJson: Prisma.JsonValue | null;
+      user?: { id: string; email: string | null; fullName: string | null } | null;
+      plan?: {
+        id: string;
+        key: string;
+        name: string;
+        durationDays: number;
+        pricePaise: number;
+        metadataJson: Prisma.JsonValue | null;
+      } | null;
+      subscription?: { id: string; endsAt: Date | null } | null;
+    },
+    statusResponse: Record<string, unknown>,
+  ) {
+    if (!order.planId) {
+      return;
+    }
+
+    const metadata = (order.metadataJson ?? {}) as Record<string, unknown>;
+    const merchantSubscriptionId =
+      (typeof metadata.merchantSubscriptionId === 'string'
+        ? metadata.merchantSubscriptionId
+        : undefined) ??
+      this.buildMerchantSubscriptionId(order.userId, order.planId);
+
+    const paymentFlow = (statusResponse.paymentFlow ?? {}) as Record<
+      string,
+      unknown
+    >;
+    const providerSubscriptionId =
+      (typeof paymentFlow.subscriptionId === 'string'
+        ? paymentFlow.subscriptionId
+        : undefined) ??
+      (typeof paymentFlow.merchantSubscriptionId === 'string'
+        ? paymentFlow.merchantSubscriptionId
+        : undefined) ??
+      merchantSubscriptionId;
+
+    const fetchedPlan =
+      order.plan ??
+      (await this.prisma.plan.findUnique({
+        where: { id: order.planId },
+        select: {
+          id: true,
+          key: true,
+          name: true,
+          durationDays: true,
+          pricePaise: true,
+          metadataJson: true,
+        },
+      }));
+    const interval = this.resolveAutoPayInterval(
+      fetchedPlan ?? {
+        durationDays: 30,
+        metadataJson: null,
+      },
+    );
+
+    const startsAt = new Date();
+    const nextChargeAt = this.addAutoPayInterval(startsAt, interval);
+    const existingMandate = await this.prisma.paymentMandate.findFirst({
+      where: {
+        OR: [
+          { setupOrderId: order.id },
+          { merchantSubscriptionId },
+          { providerSubscriptionId },
+        ],
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const mandate = existingMandate
+      ? await this.prisma.paymentMandate.update({
+          where: { id: existingMandate.id },
+          data: {
+            setupOrderId: order.id,
+            merchantSubscriptionId,
+            providerSubscriptionId,
+            status: PaymentMandateStatus.ACTIVE,
+            amountPaise:
+              fetchedPlan?.pricePaise ??
+              order.plan?.pricePaise ??
+              order.finalAmountPaise,
+            intervalUnit: interval.unit,
+            intervalCount: interval.count,
+            startsAt,
+            nextChargeAt,
+            pausedAt: null,
+            revokedAt: null,
+            metadataJson: this.toJsonValue({
+              ...(existingMandate.metadataJson as Record<string, unknown> | null),
+              setupOrderId: order.id,
+              phonepePaymentFlow: paymentFlow,
+            }),
+          },
+        })
+      : await this.prisma.paymentMandate.create({
+          data: {
+            userId: order.userId,
+            planId: order.planId,
+            setupOrderId: order.id,
+            merchantSubscriptionId,
+            providerSubscriptionId,
+            status: PaymentMandateStatus.ACTIVE,
+            amountPaise:
+              fetchedPlan?.pricePaise ??
+              order.plan?.pricePaise ??
+              order.finalAmountPaise,
+            intervalUnit: interval.unit,
+            intervalCount: interval.count,
+            startsAt,
+            nextChargeAt,
+            metadataJson: this.toJsonValue({
+              setupOrderId: order.id,
+              phonepePaymentFlow: paymentFlow,
+            }),
+          },
+        });
+
+    if (order.mandateId !== mandate.id) {
+      await this.prisma.paymentOrder.update({
+        where: { id: order.id },
+        data: {
+          mandateId: mandate.id,
+          metadataJson: this.toJsonValue({
+            ...(metadata ?? {}),
+            merchantSubscriptionId,
+            providerSubscriptionId,
+            autoPay: {
+              ...(metadata.autoPay as Record<string, unknown> | undefined),
+              requested: true,
+              eligible: true,
+              enabled: true,
+            },
+          }),
+        },
+      });
+    }
+
+    await this.handleOneTimeOrderSuccess(order);
+
+    if (order.user?.email) {
+      this.notificationsService
+        .sendAutopayEnabledEmail({
+          userId: order.user.id,
+          email: order.user.email,
+          planName: order.plan?.name,
+          nextChargeAt,
+        })
+        .catch(() => undefined);
+    }
+  }
+
+  private async handleAutoPayChargeSuccess(order: {
+    id: string;
+    userId: string;
+    planId: string | null;
+    mandateId: string | null;
+    finalAmountPaise: number;
+    metadataJson: Prisma.JsonValue | null;
+    user?: { id: string; email: string | null; fullName: string | null } | null;
+    plan?: {
+      id: string;
+      key: string;
+      name: string;
+      durationDays: number;
+      pricePaise: number;
+      metadataJson: Prisma.JsonValue | null;
+    } | null;
+    subscription?: { id: string; endsAt: Date | null } | null;
+    mandate?: {
+      id: string;
+      intervalUnit: string;
+      intervalCount: number;
+      nextChargeAt: Date | null;
+      status: PaymentMandateStatus;
+    } | null;
+  }) {
+    const now = new Date();
+    const metadata = (order.metadataJson ?? {}) as Record<string, unknown>;
+
+    if (order.mandateId) {
+      const mandate =
+        order.mandate ??
+        (await this.prisma.paymentMandate.findUnique({
+          where: { id: order.mandateId },
+        }));
+
+      if (mandate) {
+        const scheduledFor =
+          typeof metadata.scheduledFor === 'string'
+            ? new Date(metadata.scheduledFor)
+            : mandate.nextChargeAt ?? now;
+        const baseDate =
+          Number.isFinite(scheduledFor.getTime()) &&
+          scheduledFor.getTime() > now.getTime()
+            ? scheduledFor
+            : now;
+        const nextChargeAt = this.addAutoPayInterval(baseDate, {
+          unit: mandate.intervalUnit,
+          count: Math.max(1, mandate.intervalCount),
+        });
+
+        await this.prisma.paymentMandate.update({
+          where: { id: mandate.id },
+          data: {
+            status: PaymentMandateStatus.ACTIVE,
+            lastChargedAt: now,
+            nextChargeAt,
+            pausedAt: null,
+            revokedAt: null,
+          },
+        });
+
+        if (order.user?.email) {
+          this.notificationsService
+            .sendAutopayRenewalSuccessEmail({
+              userId: order.user.id,
+              email: order.user.email,
+              planName: order.plan?.name,
+              amountPaise: order.finalAmountPaise,
+              chargedAt: now,
+              nextChargeAt,
+            })
+            .catch(() => undefined);
+        }
+      }
+    }
+
+    await this.handleOneTimeOrderSuccess(order);
+  }
+
+  private async handleAutoPayChargeFailure(order: {
+    mandateId: string | null;
+    user?: { id: string; email: string | null; fullName: string | null } | null;
+    plan?: { name: string } | null;
+  }) {
+    const now = new Date();
+    const retryMinutes = Number(
+      this.configService.get<number>('PAYMENTS_AUTOPAY_RETRY_MINUTES') ??
+        DEFAULT_AUTOPAY_RETRY_MINUTES,
+    );
+    const safeRetryMinutes =
+      Number.isFinite(retryMinutes) && retryMinutes > 0
+        ? retryMinutes
+        : DEFAULT_AUTOPAY_RETRY_MINUTES;
+
+    if (order.mandateId) {
+      await this.prisma.paymentMandate.update({
+        where: { id: order.mandateId },
+        data: {
+          status: PaymentMandateStatus.ACTIVE,
+          nextChargeAt: new Date(now.getTime() + safeRetryMinutes * 60 * 1000),
+        },
+      });
+    }
+
+    if (order.user?.email) {
+      this.notificationsService
+        .sendAutopayRenewalFailureEmail({
+          userId: order.user.id,
+          email: order.user.email,
+          planName: order.plan?.name,
+          failedAt: now,
+          retryAfterMinutes: safeRetryMinutes,
+        })
+        .catch(() => undefined);
+    }
+  }
+
   private normalizeStatus(response: {
     state?: string;
     amount?: number;
     payableAmount?: number;
+    transactionId?: string;
     paymentDetails?: Array<{
       transactionId?: string;
       state?: string;
@@ -716,7 +1497,7 @@ export class PaymentsService {
     return {
       orderStatus,
       transactionStatus,
-      providerTransactionId: latestAttempt?.transactionId,
+      providerTransactionId: latestAttempt?.transactionId ?? response.transactionId,
       amountPaise:
         latestAttempt?.amount ?? response.payableAmount ?? response.amount,
     };
@@ -1038,6 +1819,176 @@ export class PaymentsService {
 
   private toJsonValue(value: unknown) {
     return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
+  }
+
+  private extractPlanValidity(plan: {
+    durationDays: number;
+    metadataJson: Prisma.JsonValue | null;
+  }) {
+    const metadata =
+      plan.metadataJson &&
+      typeof plan.metadataJson === 'object' &&
+      !Array.isArray(plan.metadataJson)
+        ? (plan.metadataJson as Record<string, unknown>)
+        : null;
+    const rawValidity =
+      metadata?.validity &&
+      typeof metadata.validity === 'object' &&
+      !Array.isArray(metadata.validity)
+        ? (metadata.validity as Record<string, unknown>)
+        : null;
+
+    const unitRaw = typeof rawValidity?.unit === 'string' ? rawValidity.unit : '';
+    const valueRaw =
+      typeof rawValidity?.value === 'number' ? rawValidity.value : undefined;
+    const labelRaw =
+      typeof rawValidity?.label === 'string' ? rawValidity.label : undefined;
+
+    const durationDays =
+      typeof rawValidity?.durationDays === 'number' &&
+      Number.isFinite(rawValidity.durationDays)
+        ? rawValidity.durationDays
+        : plan.durationDays;
+
+    if (unitRaw) {
+      return {
+        unit: unitRaw.toUpperCase(),
+        value: valueRaw,
+        durationDays,
+        label: labelRaw,
+      };
+    }
+
+    if (durationDays % 365 === 0) {
+      const value = Math.max(1, Math.round(durationDays / 365));
+      return {
+        unit: 'YEARS',
+        value,
+        durationDays,
+        label: `${value} year${value === 1 ? '' : 's'}`,
+      };
+    }
+
+    if (durationDays % 30 === 0) {
+      const value = Math.max(1, Math.round(durationDays / 30));
+      return {
+        unit: 'MONTHS',
+        value,
+        durationDays,
+        label: `${value} month${value === 1 ? '' : 's'}`,
+      };
+    }
+
+    return {
+      unit: 'DAYS',
+      value: durationDays,
+      durationDays,
+      label: `${durationDays} day${durationDays === 1 ? '' : 's'}`,
+    };
+  }
+
+  private resolveAutoPayDetails(
+    plan: {
+      durationDays: number;
+      metadataJson: Prisma.JsonValue | null;
+    },
+    requested: boolean,
+  ) {
+    const validity = this.extractPlanValidity(plan);
+    const lifetimeDays = Number(
+      this.configService.get<number>('SUBSCRIPTION_LIFETIME_DAYS') ?? 36500,
+    );
+    const safeLifetimeDays =
+      Number.isFinite(lifetimeDays) && lifetimeDays > 0 ? lifetimeDays : 36500;
+    const isLifetime =
+      validity.unit === 'LIFETIME' || plan.durationDays >= safeLifetimeDays;
+
+    if (isLifetime) {
+      return {
+        requested,
+        eligible: false,
+        reason: 'LIFETIME_PLAN',
+        message: 'AutoPay is not supported for lifetime plans.',
+        intervalUnit: 'MONTH',
+        intervalCount: 1,
+      };
+    }
+
+    let intervalUnit: 'DAY' | 'MONTH' | 'YEAR' = 'MONTH';
+    let intervalCount = 1;
+
+    if (validity.unit === 'YEARS') {
+      intervalUnit = 'YEAR';
+      intervalCount = Math.max(1, Number(validity.value ?? 1));
+    } else if (validity.unit === 'MONTHS') {
+      intervalUnit = 'MONTH';
+      intervalCount = Math.max(1, Number(validity.value ?? 1));
+    } else if (validity.unit === 'DAYS') {
+      intervalUnit = 'DAY';
+      intervalCount = Math.max(1, Number(validity.value ?? plan.durationDays));
+    } else {
+      intervalUnit = 'DAY';
+      intervalCount = Math.max(1, plan.durationDays);
+    }
+
+    return {
+      requested,
+      eligible: true,
+      reason: 'AVAILABLE',
+      message:
+        intervalUnit === 'DAY'
+          ? `AutoPay will renew every ${intervalCount} day${intervalCount === 1 ? '' : 's'}.`
+          : intervalUnit === 'MONTH'
+            ? `AutoPay will renew every ${intervalCount} month${intervalCount === 1 ? '' : 's'}.`
+            : `AutoPay will renew every ${intervalCount} year${intervalCount === 1 ? '' : 's'}.`,
+      intervalUnit,
+      intervalCount,
+    };
+  }
+
+  private resolveAutoPayInterval(plan: {
+    durationDays: number;
+    metadataJson: Prisma.JsonValue | null;
+  }) {
+    const details = this.resolveAutoPayDetails(plan, true);
+    if (!details.eligible) {
+      return {
+        unit: 'MONTH',
+        count: 1,
+      };
+    }
+    return {
+      unit: details.intervalUnit,
+      count: details.intervalCount,
+    };
+  }
+
+  private addAutoPayInterval(
+    fromDate: Date,
+    interval: { unit: string; count: number },
+  ) {
+    const next = new Date(fromDate);
+    const count = Math.max(1, interval.count);
+
+    if (interval.unit === 'YEAR') {
+      next.setFullYear(next.getFullYear() + count);
+      return next;
+    }
+
+    if (interval.unit === 'DAY') {
+      next.setDate(next.getDate() + count);
+      return next;
+    }
+
+    next.setMonth(next.getMonth() + count);
+    return next;
+  }
+
+  private buildMerchantSubscriptionId(userId: string, planId: string) {
+    const user = userId.replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 8);
+    const plan = planId.replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 8);
+    const nonce = randomUUID().replace(/-/g, '').toUpperCase().slice(0, 16);
+    return `SUB_${user}_${plan}_${nonce}`.slice(0, 60);
   }
 
   private async resolveCoupon(

@@ -76,6 +76,30 @@ const SUBSCRIPTION_FALLBACK: RenderedTemplate = {
   html: '<p>Your {{planName}} subscription is now active until <strong>{{endsAt}}</strong>.</p>',
 };
 
+const AUTOPAY_ENABLED_FALLBACK: RenderedTemplate = {
+  subject: 'AutoPay enabled',
+  text: 'AutoPay is enabled for {{planName}}. Next charge on {{nextChargeAt}}.',
+  html: '<p>AutoPay is enabled for <strong>{{planName}}</strong>.</p><p>Next charge on {{nextChargeAt}}.</p>',
+};
+
+const AUTOPAY_RENEWAL_REMINDER_FALLBACK: RenderedTemplate = {
+  subject: 'AutoPay renewal reminder',
+  text: 'Your {{planName}} renewal of {{amount}} is scheduled on {{chargeAt}}.',
+  html: '<p>Your {{planName}} renewal of <strong>{{amount}}</strong> is scheduled on {{chargeAt}}.</p>',
+};
+
+const AUTOPAY_RENEWAL_SUCCESS_FALLBACK: RenderedTemplate = {
+  subject: 'AutoPay renewal successful',
+  text: '{{amount}} has been charged for {{planName}} on {{chargedAt}}. Next charge on {{nextChargeAt}}.',
+  html: '<p><strong>{{amount}}</strong> has been charged for {{planName}} on {{chargedAt}}.</p><p>Next charge on {{nextChargeAt}}.</p>',
+};
+
+const AUTOPAY_RENEWAL_FAILURE_FALLBACK: RenderedTemplate = {
+  subject: 'AutoPay renewal failed',
+  text: 'We could not renew {{planName}} on {{failedAt}}. We will retry in {{retryAfterMinutes}} minutes.',
+  html: '<p>We could not renew {{planName}} on {{failedAt}}.</p><p>We will retry in {{retryAfterMinutes}} minutes.</p>',
+};
+
 @Injectable()
 export class NotificationsService implements OnModuleInit {
   private readonly logger = new Logger(NotificationsService.name);
@@ -502,6 +526,106 @@ export class NotificationsService implements OnModuleInit {
         endsAt,
       },
       fallback: SUBSCRIPTION_FALLBACK,
+      respectPreference: false,
+      overrideEmail: params.email,
+    });
+  }
+
+  async sendAutopayEnabledEmail(params: {
+    userId: string;
+    email: string;
+    planName?: string | null;
+    nextChargeAt: Date;
+  }) {
+    const appName = this.configService.get<string>('APP_NAME') ?? 'our app';
+
+    return this.sendTemplateToUser({
+      userId: params.userId,
+      channel: NotificationChannel.EMAIL,
+      templateKey: 'payments.autopay-enabled',
+      payload: {
+        appName,
+        planName: params.planName ?? 'Subscription',
+        nextChargeAt: this.formatDateTime(params.nextChargeAt),
+      },
+      fallback: AUTOPAY_ENABLED_FALLBACK,
+      respectPreference: false,
+      overrideEmail: params.email,
+    });
+  }
+
+  async sendAutopayRenewalReminderEmail(params: {
+    userId: string;
+    email: string;
+    planName?: string | null;
+    amountPaise: number;
+    chargeAt: Date;
+  }) {
+    const appName = this.configService.get<string>('APP_NAME') ?? 'our app';
+
+    return this.sendTemplateToUser({
+      userId: params.userId,
+      channel: NotificationChannel.EMAIL,
+      templateKey: 'payments.autopay-reminder',
+      payload: {
+        appName,
+        planName: params.planName ?? 'Subscription',
+        amount: this.formatCurrency(params.amountPaise),
+        chargeAt: this.formatDateTime(params.chargeAt),
+      },
+      fallback: AUTOPAY_RENEWAL_REMINDER_FALLBACK,
+      respectPreference: false,
+      overrideEmail: params.email,
+    });
+  }
+
+  async sendAutopayRenewalSuccessEmail(params: {
+    userId: string;
+    email: string;
+    planName?: string | null;
+    amountPaise: number;
+    chargedAt: Date;
+    nextChargeAt: Date;
+  }) {
+    const appName = this.configService.get<string>('APP_NAME') ?? 'our app';
+
+    return this.sendTemplateToUser({
+      userId: params.userId,
+      channel: NotificationChannel.EMAIL,
+      templateKey: 'payments.autopay-success',
+      payload: {
+        appName,
+        planName: params.planName ?? 'Subscription',
+        amount: this.formatCurrency(params.amountPaise),
+        chargedAt: this.formatDateTime(params.chargedAt),
+        nextChargeAt: this.formatDateTime(params.nextChargeAt),
+      },
+      fallback: AUTOPAY_RENEWAL_SUCCESS_FALLBACK,
+      respectPreference: false,
+      overrideEmail: params.email,
+    });
+  }
+
+  async sendAutopayRenewalFailureEmail(params: {
+    userId: string;
+    email: string;
+    planName?: string | null;
+    failedAt: Date;
+    retryAfterMinutes: number;
+  }) {
+    const appName = this.configService.get<string>('APP_NAME') ?? 'our app';
+
+    return this.sendTemplateToUser({
+      userId: params.userId,
+      channel: NotificationChannel.EMAIL,
+      templateKey: 'payments.autopay-failure',
+      payload: {
+        appName,
+        planName: params.planName ?? 'Subscription',
+        failedAt: this.formatDateTime(params.failedAt),
+        retryAfterMinutes: params.retryAfterMinutes,
+      },
+      fallback: AUTOPAY_RENEWAL_FAILURE_FALLBACK,
       respectPreference: false,
       overrideEmail: params.email,
     });
@@ -979,6 +1103,13 @@ export class NotificationsService implements OnModuleInit {
   private formatCurrency(amountPaise: number) {
     const amount = (amountPaise / 100).toFixed(2);
     return `INR ${amount}`;
+  }
+
+  private formatDateTime(value: Date) {
+    if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
+      return '—';
+    }
+    return value.toISOString().replace('T', ' ').slice(0, 16);
   }
 
   private parseOptionalBoolean(value?: string) {

@@ -130,6 +130,20 @@ enum PaymentOrderStatus {
   REFUNDED
 }
 
+enum PaymentOrderFlow {
+  ONE_TIME
+  AUTOPAY_SETUP
+  AUTOPAY_CHARGE
+}
+
+enum PaymentMandateStatus {
+  PENDING_SETUP
+  ACTIVE
+  PAUSED
+  REVOKED
+  FAILED
+}
+
 enum PaymentTransactionStatus {
   PENDING
   SUCCESS
@@ -223,6 +237,7 @@ model User {
   subscriptions       Subscription[]
   entitlements        Entitlement[]
   paymentOrders       PaymentOrder[]
+  paymentMandates     PaymentMandate[]
   couponRedemptions   CouponRedemption[]
   notifications       NotificationMessage[]
   notificationPrefs   NotificationPreference[]
@@ -778,6 +793,7 @@ model Plan {
 
   subscriptions Subscription[]
   orders         PaymentOrder[]
+  mandates       PaymentMandate[]
 }
 
 model Subscription {
@@ -824,6 +840,7 @@ model PaymentOrder {
   id                     String              @id @default(cuid())
   userId                 String
   planId                 String?
+  mandateId              String?
   couponId               String?
   merchantTransactionId  String              @unique
   merchantUserId         String?
@@ -832,6 +849,7 @@ model PaymentOrder {
   amountPaise            Int
   finalAmountPaise       Int
   status                 PaymentOrderStatus  @default(CREATED)
+  flow                   PaymentOrderFlow    @default(ONE_TIME)
   idempotencyKey         String?
   expiresAt              DateTime?
   metadataJson           Json?
@@ -841,8 +859,10 @@ model PaymentOrder {
 
   user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   plan         Plan?         @relation(fields: [planId], references: [id])
+  mandate      PaymentMandate? @relation("MandateOrders", fields: [mandateId], references: [id], onDelete: SetNull)
   coupon       Coupon?       @relation(fields: [couponId], references: [id])
   subscription Subscription? @relation("SubscriptionOrder")
+  setupMandate PaymentMandate? @relation("MandateSetupOrder")
 
   transactions      PaymentTransaction[]
   events            PaymentEvent[]
@@ -850,6 +870,8 @@ model PaymentOrder {
 
     @@index([userId])
     @@index([planId])
+    @@index([mandateId])
+    @@index([flow])
     @@index([status])
     @@index([status, completedAt])
   }
@@ -881,6 +903,37 @@ model PaymentEvent {
   @@index([orderId])
   @@index([providerEventId])
   @@index([eventType])
+}
+
+model PaymentMandate {
+  id                     String              @id @default(cuid())
+  userId                 String
+  planId                 String
+  setupOrderId           String?             @unique
+  provider               PaymentProvider     @default(PHONEPE)
+  merchantSubscriptionId String              @unique
+  providerSubscriptionId String?             @unique
+  status                 PaymentMandateStatus @default(PENDING_SETUP)
+  amountPaise            Int
+  intervalUnit           String              @default("MONTH")
+  intervalCount          Int                 @default(1)
+  startsAt               DateTime?
+  nextChargeAt           DateTime?
+  lastChargedAt          DateTime?
+  pausedAt               DateTime?
+  revokedAt              DateTime?
+  metadataJson           Json?
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan       Plan         @relation(fields: [planId], references: [id], onDelete: Cascade)
+  setupOrder PaymentOrder? @relation("MandateSetupOrder", fields: [setupOrderId], references: [id], onDelete: SetNull)
+  orders     PaymentOrder[] @relation("MandateOrders")
+
+  @@index([userId, status])
+  @@index([nextChargeAt, status])
+  @@index([planId])
 }
 
 model Coupon {

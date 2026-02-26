@@ -5,6 +5,8 @@ import { POLICY_KEY, POLICY_OPTIONS_KEY, REQUIRE_USER_TYPE_KEY } from '../decora
 import { AuthorizationService } from '../authorization.service';
 import { PolicyService } from '../policy.service';
 
+const WILDCARD_PERMISSION = '*';
+
 @Injectable()
 export class PolicyGuard implements CanActivate {
   constructor(
@@ -49,6 +51,10 @@ export class PolicyGuard implements CanActivate {
       if (!permissions) {
         permissions = await this.authorizationService.getUserPermissions(user.userId);
         request.permissions = permissions;
+      }
+
+      if (permissions.has(WILDCARD_PERMISSION)) {
+        return true;
       }
 
       const allowed = await this.policyService.evaluate(policyKey, {

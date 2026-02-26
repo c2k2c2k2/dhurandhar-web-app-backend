@@ -1,6 +1,6 @@
 import { IsBoolean, IsOptional, IsString } from 'class-validator';
 
-export class CheckoutDto {
+export class CheckoutPreviewDto {
   @IsString()
   planId!: string;
 

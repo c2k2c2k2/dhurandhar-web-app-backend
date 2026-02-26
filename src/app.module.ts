@@ -10,6 +10,7 @@ import { envValidationSchema } from './config/env.validation';
 import { PrismaModule } from './infra/prisma/prisma.module';
 import { SeedModule } from './infra/seed/seed.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
+import { AccessControlModule } from './modules/access-control/access-control.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { AuthorizationModule } from './modules/authorization/authorization.module';
 import { CmsModule } from './modules/cms/cms.module';
@@ -78,7 +79,8 @@ import { UsersModule } from './modules/users/users.module';
 
         const host = configService.get<string>('REDIS_HOST') ?? '127.0.0.1';
         const port = configService.get<number>('REDIS_PORT') ?? 6379;
-        const password = configService.get<string>('REDIS_PASSWORD') || undefined;
+        const password =
+          configService.get<string>('REDIS_PASSWORD') || undefined;
 
         return {
           connection: {
@@ -94,7 +96,8 @@ import { UsersModule } from './modules/users/users.module';
     ThrottlerModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => {
-        const ttlSeconds = configService.get<number>('THROTTLE_TTL_SECONDS') ?? 60;
+        const ttlSeconds =
+          configService.get<number>('THROTTLE_TTL_SECONDS') ?? 60;
         const limit = configService.get<number>('THROTTLE_LIMIT') ?? 120;
         return [
           {
@@ -108,6 +111,7 @@ import { UsersModule } from './modules/users/users.module';
     SeedModule,
     AuthModule,
     AuthorizationModule,
+    AccessControlModule,
     UsersModule,
     ContentModule,
     NotesModule,

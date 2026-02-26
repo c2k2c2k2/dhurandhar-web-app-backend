@@ -80,6 +80,32 @@ export const envValidationSchema = Joi.object({
   PHONEPE_CALLBACK_PASSWORD: Joi.string().allow('', null).optional(),
   PHONEPE_WEBHOOK_BASIC_USER: Joi.string().allow('', null).optional(),
   PHONEPE_WEBHOOK_BASIC_PASS: Joi.string().allow('', null).optional(),
+  PHONEPE_SUBSCRIPTION_SETUP_FLOW_TYPE: Joi.string().default(
+    'SUBSCRIPTION_CHECKOUT_SETUP',
+  ),
+  PHONEPE_SUBSCRIPTION_TYPE: Joi.string().default('RECURRING'),
+  PHONEPE_SUBSCRIPTION_PRODUCT_TYPE: Joi.string().default('UPI_MANDATE'),
+  PHONEPE_SUBSCRIPTION_AUTH_WORKFLOW_TYPE: Joi.string().default('TRANSACTION'),
+  PHONEPE_SUBSCRIPTION_AMOUNT_TYPE: Joi.string()
+    .valid('FIXED', 'VARIABLE')
+    .default('FIXED'),
+  PHONEPE_SUBSCRIPTION_FREQUENCY: Joi.string().default('ON_DEMAND'),
+  PHONEPE_SUBSCRIPTION_REDEMPTION_FLOW_TYPE: Joi.string().default(
+    'SUBSCRIPTION_REDEMPTION',
+  ),
+  PHONEPE_SUBSCRIPTION_RETRY_STRATEGY: Joi.string().default('STANDARD_RETRY'),
+  PHONEPE_SUBSCRIPTION_AUTO_DEBIT: Joi.boolean()
+    .truthy('true')
+    .falsy('false')
+    .default(true),
+  PHONEPE_SUBSCRIPTION_NOTIFY_BEFORE_EXECUTE: Joi.boolean()
+    .truthy('true')
+    .falsy('false')
+    .default(true),
+  PHONEPE_SUBSCRIPTION_MANDATE_VALIDITY_DAYS: Joi.number()
+    .integer()
+    .min(30)
+    .default(3650),
 
   SUBSCRIPTION_STACKING: Joi.boolean()
     .truthy('true')
@@ -89,6 +115,9 @@ export const envValidationSchema = Joi.object({
   SUBSCRIPTION_LIFETIME_DAYS: Joi.number().integer().min(365).default(36500),
   PENDING_ORDER_EXPIRE_MINUTES: Joi.number().integer().default(30),
   PAYMENTS_RECONCILE_INTERVAL_SECONDS: Joi.number().integer().default(60),
+  PAYMENTS_AUTOPAY_INTERVAL_SECONDS: Joi.number().integer().min(10).default(300),
+  PAYMENTS_AUTOPAY_RETRY_MINUTES: Joi.number().integer().min(1).default(60),
+  PAYMENTS_AUTOPAY_REMINDER_HOURS: Joi.number().integer().min(1).default(24),
 
   SMTP_HOST: Joi.string().required(),
   SMTP_PORT: Joi.number().integer().default(587),

@@ -113,15 +113,33 @@ export class SeedService implements OnModuleInit {
       { key: 'tests.publish', description: 'Publish tests.' },
       { key: 'users.read', description: 'View users.' },
       { key: 'users.manage', description: 'Manage users and entitlements.' },
+      { key: 'rbac.read', description: 'View roles and permissions.' },
+      {
+        key: 'rbac.manage',
+        description: 'Create and manage roles and role assignments.',
+      },
       { key: 'payments.read', description: 'View payments and orders.' },
       { key: 'payments.refund', description: 'Issue refunds.' },
+      {
+        key: 'subscriptions.manage',
+        description: 'Assign subscriptions to students from admin panel.',
+      },
       { key: 'admin.config.write', description: 'Modify admin settings.' },
       { key: 'analytics.read', description: 'View analytics.' },
       { key: 'admin.audit.read', description: 'View audit logs.' },
-      { key: 'security.read', description: 'View security signals and sessions.' },
+      {
+        key: 'security.read',
+        description: 'View security signals and sessions.',
+      },
       { key: 'security.manage', description: 'Manage security actions.' },
-      { key: 'notifications.read', description: 'View notification templates and logs.' },
-      { key: 'notifications.manage', description: 'Manage notification templates and broadcasts.' },
+      {
+        key: 'notifications.read',
+        description: 'View notification templates and logs.',
+      },
+      {
+        key: 'notifications.manage',
+        description: 'Manage notification templates and broadcasts.',
+      },
     ];
   }
 
@@ -155,13 +173,18 @@ export class SeedService implements OnModuleInit {
         key: 'ADMIN_TEST',
         name: 'Test Admin',
         description: 'Manage tests and questions.',
-        permissions: ['tests.crud', 'tests.publish', 'questions.read', 'questions.crud'],
+        permissions: [
+          'tests.crud',
+          'tests.publish',
+          'questions.read',
+          'questions.crud',
+        ],
       },
       {
         key: 'ADMIN_FINANCE',
         name: 'Finance Admin',
         description: 'Manage payments and refunds.',
-        permissions: ['payments.read', 'payments.refund'],
+        permissions: ['payments.read', 'payments.refund', 'subscriptions.manage'],
       },
       {
         key: 'STUDENT',
@@ -182,7 +205,14 @@ export class SeedService implements OnModuleInit {
           text: 'Your {{appName}} OTP is {{otp}}. It expires in {{expiresInMinutes}} minutes.',
           html: '<p>Your {{appName}} OTP is <strong>{{otp}}</strong>. It expires in {{expiresInMinutes}} minutes.</p>',
         },
-        variablesJson: ['appName', 'otp', 'expiresInMinutes', 'purpose', 'fullName', 'email'],
+        variablesJson: [
+          'appName',
+          'otp',
+          'expiresInMinutes',
+          'purpose',
+          'fullName',
+          'email',
+        ],
         isActive: true,
       },
       {
@@ -193,7 +223,13 @@ export class SeedService implements OnModuleInit {
           text: 'Reset your {{appName}} password using this link: {{resetLink}}. This link expires in {{expiresInMinutes}} minutes.',
           html: '<p>Reset your {{appName}} password using this link: <a href="{{resetLink}}">Reset Password</a>. This link expires in {{expiresInMinutes}} minutes.</p>',
         },
-        variablesJson: ['appName', 'resetLink', 'expiresInMinutes', 'fullName', 'email'],
+        variablesJson: [
+          'appName',
+          'resetLink',
+          'expiresInMinutes',
+          'fullName',
+          'email',
+        ],
         isActive: true,
       },
       {
@@ -204,7 +240,14 @@ export class SeedService implements OnModuleInit {
           text: 'We received your payment of {{amount}} for {{planName}}. Order ID: {{orderId}}.',
           html: '<p>We received your payment of <strong>{{amount}}</strong> for {{planName}}.</p><p>Order ID: {{orderId}}</p>',
         },
-        variablesJson: ['appName', 'amount', 'planName', 'orderId', 'fullName', 'email'],
+        variablesJson: [
+          'appName',
+          'amount',
+          'planName',
+          'orderId',
+          'fullName',
+          'email',
+        ],
         isActive: true,
       },
       {
@@ -239,7 +282,11 @@ export class SeedService implements OnModuleInit {
       roles.map((role) =>
         this.prisma.role.upsert({
           where: { key: role.key },
-          create: { key: role.key, name: role.name, description: role.description },
+          create: {
+            key: role.key,
+            name: role.name,
+            description: role.description,
+          },
           update: { name: role.name, description: role.description },
         }),
       ),
@@ -248,7 +295,9 @@ export class SeedService implements OnModuleInit {
     const permissionMap = await this.mapPermissionsByKey(permissions);
 
     for (const role of roles) {
-      const roleRecord = await this.prisma.role.findUnique({ where: { key: role.key } });
+      const roleRecord = await this.prisma.role.findUnique({
+        where: { key: role.key },
+      });
       if (!roleRecord || role.permissions.length === 0) {
         continue;
       }
@@ -278,7 +327,9 @@ export class SeedService implements OnModuleInit {
     const password = this.configService.get<string>('SUPERADMIN_PASSWORD');
 
     if (!email || !password) {
-      this.logger.warn('Skipping superadmin seed: SUPERADMIN_EMAIL or SUPERADMIN_PASSWORD missing.');
+      this.logger.warn(
+        'Skipping superadmin seed: SUPERADMIN_EMAIL or SUPERADMIN_PASSWORD missing.',
+      );
       return;
     }
 
@@ -302,7 +353,9 @@ export class SeedService implements OnModuleInit {
       });
     }
 
-    const superRole = await this.prisma.role.findUnique({ where: { key: 'ADMIN_SUPER' } });
+    const superRole = await this.prisma.role.findUnique({
+      where: { key: 'ADMIN_SUPER' },
+    });
     if (superRole) {
       await this.prisma.userRole.createMany({
         data: [{ userId: user.id, roleId: superRole.id }],
@@ -324,7 +377,9 @@ export class SeedService implements OnModuleInit {
       select: { key: true },
     });
     const existingKeys = new Set(existing.map((item) => item.key));
-    const missing = templates.filter((template) => !existingKeys.has(template.key));
+    const missing = templates.filter(
+      (template) => !existingKeys.has(template.key),
+    );
 
     if (!missing.length) {
       return;
@@ -634,7 +689,9 @@ export class SeedService implements OnModuleInit {
   }
 
   private shouldSeedDefaultCatalog() {
-    const explicit = this.configService.get<string | boolean>('SEED_DEFAULT_CATALOG');
+    const explicit = this.configService.get<string | boolean>(
+      'SEED_DEFAULT_CATALOG',
+    );
     if (explicit === undefined || explicit === null || explicit === '') {
       const env = this.configService.get<string>('NODE_ENV') ?? 'development';
       return env !== 'production';
@@ -652,7 +709,9 @@ export class SeedService implements OnModuleInit {
   }
 
   private async seedSampleData(): Promise<void> {
-    const enabled = this.parseBoolean(this.configService.get<string>('SEED_SAMPLE_DATA'));
+    const enabled = this.parseBoolean(
+      this.configService.get<string>('SEED_SAMPLE_DATA'),
+    );
     if (!enabled) {
       return;
     }
@@ -704,7 +763,9 @@ export class SeedService implements OnModuleInit {
         }),
       ),
     );
-    const subjectMap = new Map(subjects.map((subject) => [subject.key, subject]));
+    const subjectMap = new Map(
+      subjects.map((subject) => [subject.key, subject]),
+    );
 
     const topicSeeds = [
       { subjectKey: 'seed-math', name: 'Algebra', orderIndex: 1 },
@@ -899,7 +960,12 @@ export class SeedService implements OnModuleInit {
         type: QuestionType.SINGLE_CHOICE,
         difficulty: QuestionDifficulty.MEDIUM,
         statement: 'Which law explains inertia?',
-        options: ["Newton's First Law", "Newton's Second Law", "Newton's Third Law", 'Hooke’s Law'],
+        options: [
+          "Newton's First Law",
+          "Newton's Second Law",
+          "Newton's Third Law",
+          'Hooke’s Law',
+        ],
         answer: "Newton's First Law",
       },
       {
@@ -948,7 +1014,9 @@ export class SeedService implements OnModuleInit {
     }
 
     const testTitle = 'Seed Test - Basics';
-    let test = await this.prisma.test.findFirst({ where: { title: testTitle } });
+    let test = await this.prisma.test.findFirst({
+      where: { title: testTitle },
+    });
     if (!test) {
       const questionIds = [
         questionMap.get('seed-q1'),
@@ -1078,8 +1146,13 @@ export class SeedService implements OnModuleInit {
         pricePaise: 49900,
         durationDays: 30,
         isActive: true,
-        metadataJson: { highlight: 'Best for beginners' } as Prisma.InputJsonValue,
-        featuresJson: ['Notes access', 'Practice quizzes'] as Prisma.InputJsonValue,
+        metadataJson: {
+          highlight: 'Best for beginners',
+        } as Prisma.InputJsonValue,
+        featuresJson: [
+          'Notes access',
+          'Practice quizzes',
+        ] as Prisma.InputJsonValue,
       },
       update: {
         name: 'Seed Basic',
@@ -1189,13 +1262,20 @@ export class SeedService implements OnModuleInit {
           configJson: {
             hero: {
               title: 'Seed Academy',
-              subtitle: 'Prepare smarter with curated notes, tests, and practice.',
+              subtitle:
+                'Prepare smarter with curated notes, tests, and practice.',
               imageUrl:
                 'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?auto=format&fit=crop&w=1200&q=80',
             },
             features: [
-              { title: 'Practice Engine', body: 'Adaptive practice to boost scores.' },
-              { title: 'Notes Library', body: 'Premium notes with watermarking.' },
+              {
+                title: 'Practice Engine',
+                body: 'Adaptive practice to boost scores.',
+              },
+              {
+                title: 'Notes Library',
+                body: 'Premium notes with watermarking.',
+              },
             ],
           } as Prisma.InputJsonValue,
         },
@@ -1246,7 +1326,9 @@ export class SeedService implements OnModuleInit {
       await this.prisma.announcement.create({
         data: {
           title: 'Seed Announcement',
-          bodyJson: { text: 'Welcome to the seeded environment.' } as Prisma.InputJsonValue,
+          bodyJson: {
+            text: 'Welcome to the seeded environment.',
+          } as Prisma.InputJsonValue,
           pinned: true,
           isActive: true,
           createdByUserId: adminId ?? undefined,
@@ -1278,7 +1360,9 @@ export class SeedService implements OnModuleInit {
       });
     }
 
-    const pageExists = await this.prisma.page.findFirst({ where: { slug: 'about' } });
+    const pageExists = await this.prisma.page.findFirst({
+      where: { slug: 'about' },
+    });
     if (!pageExists) {
       await this.prisma.page.create({
         data: {
@@ -1392,7 +1476,8 @@ export class SeedService implements OnModuleInit {
 
   private async ensureDemoStudent() {
     const email =
-      this.configService.get<string>('DEMO_STUDENT_EMAIL') ?? 'student@seed.local';
+      this.configService.get<string>('DEMO_STUDENT_EMAIL') ??
+      'student@seed.local';
     const password =
       this.configService.get<string>('DEMO_STUDENT_PASSWORD') ?? 'SeedPass@123';
 
@@ -1416,7 +1501,9 @@ export class SeedService implements OnModuleInit {
       });
     }
 
-    const studentRole = await this.prisma.role.findUnique({ where: { key: 'STUDENT' } });
+    const studentRole = await this.prisma.role.findUnique({
+      where: { key: 'STUDENT' },
+    });
     if (studentRole) {
       await this.prisma.userRole.createMany({
         data: [{ userId: user.id, roleId: studentRole.id }],
@@ -1433,7 +1520,9 @@ export class SeedService implements OnModuleInit {
     subjectName?: string | null,
     topicNames: string[] = [],
   ) {
-    return [title, description, subjectName, ...topicNames].filter(Boolean).join(' ');
+    return [title, description, subjectName, ...topicNames]
+      .filter(Boolean)
+      .join(' ');
   }
 
   private parseBoolean(value?: string | boolean) {
@@ -1465,11 +1554,15 @@ export class SeedService implements OnModuleInit {
     return value;
   }
 
-  private async mapPermissionsByKey(items: SeedPermission[]): Promise<Map<string, Permission>> {
+  private async mapPermissionsByKey(
+    items: SeedPermission[],
+  ): Promise<Map<string, Permission>> {
     const permissions = await this.prisma.permission.findMany({
       where: { key: { in: items.map((item) => item.key) } },
     });
 
-    return new Map(permissions.map((permission) => [permission.key, permission]));
+    return new Map(
+      permissions.map((permission) => [permission.key, permission]),
+    );
   }
 }

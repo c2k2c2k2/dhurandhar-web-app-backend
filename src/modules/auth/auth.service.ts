@@ -56,10 +56,8 @@ export class AuthService {
       },
     });
 
-    const { accessToken, refreshToken, sessionId } = await this.authTokenService.issueTokens(
-      user.id,
-      user.type,
-    );
+    const { accessToken, refreshToken, sessionId } =
+      await this.authTokenService.issueTokens(user.id, user.type);
     await this.createRefreshSession(user.id, refreshToken, sessionId, meta);
 
     return {
@@ -90,11 +88,8 @@ export class AuthService {
     }
 
     const roles = user.userRoles?.map((item) => item.role.key) ?? [];
-    const { accessToken, refreshToken, sessionId } = await this.authTokenService.issueTokens(
-      user.id,
-      user.type,
-      roles,
-    );
+    const { accessToken, refreshToken, sessionId } =
+      await this.authTokenService.issueTokens(user.id, user.type, roles);
     await this.createRefreshSession(user.id, refreshToken, sessionId, meta);
 
     await this.prisma.user.update({
@@ -130,7 +125,10 @@ export class AuthService {
       });
     }
 
-    const tokenMatches = await bcrypt.compare(dto.refreshToken, session.hashedToken);
+    const tokenMatches = await bcrypt.compare(
+      dto.refreshToken,
+      session.hashedToken,
+    );
     if (!tokenMatches) {
       await this.prisma.refreshSession.update({
         where: { id: session.id },
@@ -155,12 +153,14 @@ export class AuthService {
     }
 
     const roles = user.userRoles?.map((item) => item.role.key) ?? [];
-    const { accessToken, refreshToken, sessionId } = await this.authTokenService.issueTokens(
+    const { accessToken, refreshToken, sessionId } =
+      await this.authTokenService.issueTokens(user.id, user.type, roles);
+    const newSession = await this.createRefreshSession(
       user.id,
-      user.type,
-      roles,
+      refreshToken,
+      sessionId,
+      meta,
     );
-    const newSession = await this.createRefreshSession(user.id, refreshToken, sessionId, meta);
 
     await this.prisma.refreshSession.update({
       where: { id: session.id },
@@ -198,7 +198,30 @@ export class AuthService {
 
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      include: { userRoles: { include: { role: true } } },
+      include: {
+        userRoles: {
+          include: {
+            role: {
+              include: {
+                rolePermissions: {
+                  include: {
+                    permission: {
+                      select: { key: true },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        userPermissions: {
+          include: {
+            permission: {
+              select: { key: true },
+            },
+          },
+        },
+      },
     });
 
     if (!user) {
@@ -389,7 +412,11 @@ export class AuthService {
       where: { id: tokenId },
     });
 
-    if (!tokenRecord || tokenRecord.usedAt || tokenRecord.expiresAt <= new Date()) {
+    if (
+      !tokenRecord ||
+      tokenRecord.usedAt ||
+      tokenRecord.expiresAt <= new Date()
+    ) {
       throw new UnauthorizedException({
         code: 'AUTH_RESET_INVALID',
         message: 'Reset token is invalid or expired.',
@@ -439,7 +466,9 @@ export class AuthService {
     });
   }
 
-  private async verifyRefreshToken(token: string): Promise<{ sub: string; sid: string }> {
+  private async verifyRefreshToken(
+    token: string,
+  ): Promise<{ sub: string; sid: string }> {
     const refreshSecret = this.configService.get<string>('JWT_REFRESH_SECRET');
     if (!refreshSecret) {
       throw new BadRequestException({
@@ -449,7 +478,10 @@ export class AuthService {
     }
 
     try {
-      const payload = await this.jwtService.verifyAsync<{ sub: string; sid?: string }>(token, {
+      const payload = await this.jwtService.verifyAsync<{
+        sub: string;
+        sid?: string;
+      }>(token, {
         secret: refreshSecret,
       });
       if (!payload.sub || !payload.sid) {
@@ -465,7 +497,22 @@ export class AuthService {
   }
 
   private sanitizeUser(
-    user: { id: string; email: string; fullName?: string | null; type: UserType; userRoles?: { role: { key: string } }[] },
+    user: {
+      id: string;
+      email: string;
+      fullName?: string | null;
+      type: UserType;
+      userRoles?: {
+        role: {
+          key: string;
+          rolePermissions?: { permission: { key: string } }[];
+        };
+      }[];
+      userPermissions?: {
+        allow: boolean;
+        permission: { key: string };
+      }[];
+    },
     includeRoles = false,
   ) {
     const base = {
@@ -479,9 +526,26 @@ export class AuthService {
       return base;
     }
 
+    const permissions = new Set<string>();
+    user.userRoles?.forEach((roleLink) => {
+      roleLink.role.rolePermissions?.forEach((rolePermission) => {
+        permissions.add(rolePermission.permission.key);
+      });
+    });
+    user.userPermissions?.forEach((userPermission) => {
+      if (userPermission.allow) {
+        permissions.add(userPermission.permission.key);
+      } else {
+        permissions.delete(userPermission.permission.key);
+      }
+    });
+
     return {
       ...base,
       roles: user.userRoles?.map((item) => item.role.key) ?? [],
+      permissions: Array.from(permissions).sort((left, right) =>
+        left.localeCompare(right),
+      ),
     };
   }
 
@@ -569,6 +633,9 @@ export class AuthService {
   }
 
   private shouldExposeSecret() {
-    return (this.configService.get<string>('NODE_ENV') ?? 'development') !== 'production';
+    return (
+      (this.configService.get<string>('NODE_ENV') ?? 'development') !==
+      'production'
+    );
   }
 }

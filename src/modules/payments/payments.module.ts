@@ -16,6 +16,7 @@ import { PaymentsReconcileService } from './payments.reconcile.service';
 import { CouponsService } from './coupons.service';
 import { AdminCouponsController } from './admin-coupons.controller';
 import { AdminPaymentsController } from './admin-payments.controller';
+import { PaymentsAutopayService } from './payments.autopay.service';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { AdminPaymentsController } from './admin-payments.controller';
     SubscriptionsService,
     PhonepeService,
     PaymentsReconcileService,
+    PaymentsAutopayService,
     CouponsService,
   ],
   exports: [EntitlementService, SubscriptionsService, PlansService, PhonepeService],
