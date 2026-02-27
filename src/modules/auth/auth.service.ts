@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
   UnauthorizedException,
@@ -10,6 +11,10 @@ import { OtpPurpose, UserType } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { randomBytes, randomUUID } from 'crypto';
 import ms = require('ms');
+import {
+  getIndianPhoneAliases,
+  normalizeIndianPhone,
+} from '../../common/utils/phone';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import {
   LoginDto,
@@ -24,6 +29,10 @@ import {
 import { AuthTokenService } from './auth-token.service';
 import { NotificationsService } from '../notifications/notifications.service';
 
+type StudentSingleSessionStrategy =
+  | 'FORCE_LOGOUT_EXISTING'
+  | 'DENY_NEW_LOGIN';
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -35,30 +44,53 @@ export class AuthService {
   ) {}
 
   async register(dto: RegisterDto, meta?: { ip?: string; userAgent?: string }) {
+    const normalizedEmail = dto.email.trim().toLowerCase();
+    const normalizedPhone = this.normalizeIndianPhoneOrThrow(dto.phone);
+    const phoneAliases = getIndianPhoneAliases(normalizedPhone);
+
     const existing = await this.prisma.user.findFirst({
-      where: { email: dto.email },
+      where: {
+        OR: [{ email: normalizedEmail }, { phone: { in: phoneAliases } }],
+      },
     });
     if (existing) {
+      if (existing.email === normalizedEmail) {
+        throw new BadRequestException({
+          code: 'AUTH_EMAIL_EXISTS',
+          message: 'Email already registered.',
+        });
+      }
+
       throw new BadRequestException({
-        code: 'AUTH_EMAIL_EXISTS',
-        message: 'Email already registered.',
+        code: 'AUTH_PHONE_EXISTS',
+        message: 'Phone number already registered.',
       });
     }
+
+    await this.consumeRegistrationOtp(normalizedEmail, dto.otp);
 
     const passwordHash = await this.hashValue(dto.password);
 
     const user = await this.prisma.user.create({
       data: {
-        email: dto.email,
+        email: normalizedEmail,
+        phone: normalizedPhone,
         fullName: dto.fullName,
         passwordHash,
+        emailVerifiedAt: new Date(),
         type: UserType.STUDENT,
       },
     });
 
     const { accessToken, refreshToken, sessionId } =
       await this.authTokenService.issueTokens(user.id, user.type);
-    await this.createRefreshSession(user.id, refreshToken, sessionId, meta);
+    await this.createLoginSession(
+      user.id,
+      user.type,
+      refreshToken,
+      sessionId,
+      meta,
+    );
 
     return {
       user: this.sanitizeUser(user),
@@ -90,7 +122,13 @@ export class AuthService {
     const roles = user.userRoles?.map((item) => item.role.key) ?? [];
     const { accessToken, refreshToken, sessionId } =
       await this.authTokenService.issueTokens(user.id, user.type, roles);
-    await this.createRefreshSession(user.id, refreshToken, sessionId, meta);
+    await this.createLoginSession(
+      user.id,
+      user.type,
+      refreshToken,
+      sessionId,
+      meta,
+    );
 
     await this.prisma.user.update({
       where: { id: user.id },
@@ -130,9 +168,18 @@ export class AuthService {
       session.hashedToken,
     );
     if (!tokenMatches) {
-      await this.prisma.refreshSession.update({
-        where: { id: session.id },
-        data: { revokedAt: new Date() },
+      await this.prisma.$transaction(async (tx) => {
+        await tx.refreshSession.update({
+          where: { id: session.id },
+          data: { revokedAt: new Date() },
+        });
+        await tx.user.updateMany({
+          where: {
+            id: session.userId,
+            activeStudentSessionId: session.id,
+          },
+          data: { activeStudentSessionId: null },
+        });
       });
       throw new UnauthorizedException({
         code: 'AUTH_SESSION_COMPROMISED',
@@ -152,20 +199,28 @@ export class AuthService {
       });
     }
 
+    const enforceStudentSingleSession = this.shouldEnforceStudentSingleSession(
+      user.type,
+    );
+    if (
+      enforceStudentSingleSession &&
+      user.activeStudentSessionId &&
+      user.activeStudentSessionId !== session.id
+    ) {
+      this.throwSessionConflict();
+    }
+
     const roles = user.userRoles?.map((item) => item.role.key) ?? [];
     const { accessToken, refreshToken, sessionId } =
       await this.authTokenService.issueTokens(user.id, user.type, roles);
-    const newSession = await this.createRefreshSession(
+    await this.rotateRefreshSession(
       user.id,
+      user.type,
+      session.id,
       refreshToken,
       sessionId,
       meta,
     );
-
-    await this.prisma.refreshSession.update({
-      where: { id: session.id },
-      data: { revokedAt: new Date(), replacedBySessionId: newSession.id },
-    });
 
     return { accessToken, refreshToken };
   }
@@ -180,9 +235,15 @@ export class AuthService {
 
     const payload = await this.verifyRefreshToken(dto.refreshToken);
 
-    await this.prisma.refreshSession.updateMany({
-      where: { id: payload.sid, userId: payload.sub, revokedAt: null },
-      data: { revokedAt: new Date() },
+    await this.prisma.$transaction(async (tx) => {
+      await tx.refreshSession.updateMany({
+        where: { id: payload.sid, userId: payload.sub, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      await tx.user.updateMany({
+        where: { id: payload.sub, activeStudentSessionId: payload.sid },
+        data: { activeStudentSessionId: null },
+      });
     });
 
     return { success: true };
@@ -247,25 +308,40 @@ export class AuthService {
       });
     }
 
-    return this.prisma.refreshSession.findMany({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
-      select: {
-        id: true,
-        userAgent: true,
-        ip: true,
-        revokedAt: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-    });
+    const [user, sessions] = await this.prisma.$transaction([
+      this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { activeStudentSessionId: true },
+      }),
+      this.prisma.refreshSession.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          userAgent: true,
+          ip: true,
+          revokedAt: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      }),
+    ]);
+
+    return sessions.map((session) => ({
+      ...session,
+      isActive:
+        !session.revokedAt && user?.activeStudentSessionId === session.id,
+    }));
   }
 
   async requestOtp(dto: OtpRequestDto) {
     const identifier = this.resolveIdentifier(dto.email, dto.phone);
+    const isEmailIdentifier = identifier.includes('@');
     const user = await this.findUserByIdentifier(identifier);
+    const allowEmailVerificationWithoutUser =
+      dto.purpose === OtpPurpose.LOGIN && isEmailIdentifier;
 
-    if (!user) {
+    if (!user && !allowEmailVerificationWithoutUser) {
       throw new NotFoundException({
         code: 'AUTH_USER_NOT_FOUND',
         message: 'User not found.',
@@ -280,7 +356,7 @@ export class AuthService {
 
     await this.prisma.otpCode.create({
       data: {
-        userId: user.id,
+        userId: user?.id,
         identifier,
         purpose: dto.purpose,
         codeHash,
@@ -291,15 +367,26 @@ export class AuthService {
     const emailTarget =
       dto.email ?? (identifier.includes('@') ? identifier : undefined);
     if (emailTarget) {
-      this.notificationsService
-        .sendOtpEmail({
-          userId: user.id,
-          email: emailTarget,
-          otp,
-          expiresAt,
-          purpose: dto.purpose,
-        })
-        .catch(() => undefined);
+      if (user?.id) {
+        this.notificationsService
+          .sendOtpEmail({
+            userId: user.id,
+            email: emailTarget,
+            otp,
+            expiresAt,
+            purpose: dto.purpose,
+          })
+          .catch(() => undefined);
+      } else {
+        this.notificationsService
+          .sendOtpEmailToAddress({
+            email: emailTarget,
+            otp,
+            expiresAt,
+            purpose: dto.purpose,
+          })
+          .catch(() => undefined);
+      }
     }
 
     return {
@@ -433,36 +520,156 @@ export class AuthService {
 
     const passwordHash = await this.hashValue(dto.newPassword);
 
-    await this.prisma.$transaction([
-      this.prisma.user.update({
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
         where: { id: tokenRecord.userId },
-        data: { passwordHash },
-      }),
-      this.prisma.passwordResetToken.update({
+        data: { passwordHash, activeStudentSessionId: null },
+      });
+      await tx.passwordResetToken.update({
         where: { id: tokenRecord.id },
         data: { usedAt: new Date() },
-      }),
-    ]);
+      });
+      await tx.refreshSession.updateMany({
+        where: { userId: tokenRecord.userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      await tx.noteViewSession.updateMany({
+        where: { userId: tokenRecord.userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+    });
 
     return { success: true };
   }
 
   // Tokens issued via AuthTokenService for easy swap with external IdP later.
 
-  private async createRefreshSession(
+  private async createLoginSession(
     userId: string,
+    userType: UserType,
     refreshToken: string,
     sessionId: string,
     meta?: { ip?: string; userAgent?: string },
   ) {
-    return this.prisma.refreshSession.create({
-      data: {
-        id: sessionId,
-        userId,
-        hashedToken: await this.hashValue(refreshToken),
-        ip: meta?.ip,
-        userAgent: meta?.userAgent,
-      },
+    const hashedToken = await this.hashValue(refreshToken);
+    const shouldEnforce = this.shouldEnforceStudentSingleSession(userType);
+    const strategy = this.getStudentSingleSessionStrategy();
+
+    await this.prisma.$transaction(async (tx) => {
+      if (shouldEnforce) {
+        if (strategy === 'DENY_NEW_LOGIN') {
+          const existingSession = await tx.refreshSession.findFirst({
+            where: { userId, revokedAt: null },
+            select: { id: true },
+          });
+          if (existingSession) {
+            throw new ConflictException({
+              code: 'AUTH_ALREADY_LOGGED_IN',
+              message:
+                'This account is already active on another device. Please logout there first.',
+            });
+          }
+        } else {
+          await tx.refreshSession.updateMany({
+            where: { userId, revokedAt: null },
+            data: { revokedAt: new Date() },
+          });
+        }
+      }
+
+      await tx.refreshSession.create({
+        data: {
+          id: sessionId,
+          userId,
+          hashedToken,
+          ip: meta?.ip,
+          userAgent: meta?.userAgent,
+        },
+      });
+
+      if (shouldEnforce) {
+        await tx.user.update({
+          where: { id: userId },
+          data: { activeStudentSessionId: sessionId },
+        });
+      }
+    });
+  }
+
+  private async rotateRefreshSession(
+    userId: string,
+    userType: UserType,
+    currentSessionId: string,
+    refreshToken: string,
+    sessionId: string,
+    meta?: { ip?: string; userAgent?: string },
+  ) {
+    const hashedToken = await this.hashValue(refreshToken);
+    const shouldEnforce = this.shouldEnforceStudentSingleSession(userType);
+
+    await this.prisma.$transaction(async (tx) => {
+      if (shouldEnforce) {
+        await tx.refreshSession.updateMany({
+          where: {
+            userId,
+            revokedAt: null,
+            id: { not: currentSessionId },
+          },
+          data: { revokedAt: new Date() },
+        });
+      }
+
+      await tx.refreshSession.create({
+        data: {
+          id: sessionId,
+          userId,
+          hashedToken,
+          ip: meta?.ip,
+          userAgent: meta?.userAgent,
+        },
+      });
+
+      const revokedCurrent = await tx.refreshSession.updateMany({
+        where: { id: currentSessionId, userId, revokedAt: null },
+        data: { revokedAt: new Date(), replacedBySessionId: sessionId },
+      });
+      if (!revokedCurrent.count) {
+        throw new UnauthorizedException({
+          code: 'AUTH_SESSION_REVOKED',
+          message: 'Refresh session has been revoked.',
+        });
+      }
+
+      if (shouldEnforce) {
+        await tx.user.update({
+          where: { id: userId },
+          data: { activeStudentSessionId: sessionId },
+        });
+      }
+    });
+  }
+
+  private shouldEnforceStudentSingleSession(userType: UserType) {
+    return (
+      userType === UserType.STUDENT &&
+      (this.configService.get<boolean>('STUDENT_SINGLE_SESSION_ENFORCEMENT') ??
+        true)
+    );
+  }
+
+  private getStudentSingleSessionStrategy(): StudentSingleSessionStrategy {
+    return (
+      this.configService.get<StudentSingleSessionStrategy>(
+        'STUDENT_SINGLE_SESSION_STRATEGY',
+      ) ?? 'FORCE_LOGOUT_EXISTING'
+    );
+  }
+
+  private throwSessionConflict() {
+    throw new UnauthorizedException({
+      code: 'AUTH_SESSION_CONFLICT',
+      message:
+        'Your account is already active on another device. Please login again.',
     });
   }
 
@@ -556,13 +763,28 @@ export class AuthService {
         message: 'Email or phone is required.',
       });
     }
-    return email ?? phone ?? '';
+
+    if (email?.trim()) {
+      return email.trim().toLowerCase();
+    }
+
+    return this.normalizeIndianPhoneOrThrow(phone ?? '');
   }
 
   private async findUserByIdentifier(identifier: string) {
+    if (!identifier.includes('@')) {
+      return this.prisma.user.findFirst({
+        where: {
+          phone: {
+            in: getIndianPhoneAliases(identifier),
+          },
+        },
+      });
+    }
+
     return this.prisma.user.findFirst({
       where: {
-        OR: [{ email: identifier }, { phone: identifier }],
+        email: identifier,
       },
     });
   }
@@ -577,6 +799,17 @@ export class AuthService {
 
   private async hashValue(value: string) {
     return bcrypt.hash(value, 10);
+  }
+
+  private normalizeIndianPhoneOrThrow(phone: string) {
+    try {
+      return normalizeIndianPhone(phone);
+    } catch {
+      throw new BadRequestException({
+        code: 'AUTH_PHONE_INVALID',
+        message: 'Enter a valid Indian mobile number.',
+      });
+    }
   }
 
   private async createPasswordResetToken(userId: string) {
@@ -595,6 +828,49 @@ export class AuthService {
     });
 
     return { token: `${tokenId}.${tokenSecret}`, expiresAt };
+  }
+
+  private async consumeRegistrationOtp(email: string, otp: string) {
+    const otpRecord = await this.prisma.otpCode.findFirst({
+      where: {
+        identifier: email,
+        purpose: OtpPurpose.LOGIN,
+        consumedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (!otpRecord) {
+      throw new UnauthorizedException({
+        code: 'AUTH_OTP_INVALID',
+        message: 'OTP is invalid or expired.',
+      });
+    }
+
+    const valid = await bcrypt.compare(otp, otpRecord.codeHash);
+    if (!valid) {
+      await this.prisma.otpCode.update({
+        where: { id: otpRecord.id },
+        data: { attempts: { increment: 1 } },
+      });
+      throw new UnauthorizedException({
+        code: 'AUTH_OTP_INVALID',
+        message: 'OTP is invalid or expired.',
+      });
+    }
+
+    const consumed = await this.prisma.otpCode.updateMany({
+      where: { id: otpRecord.id, consumedAt: null },
+      data: { consumedAt: new Date() },
+    });
+
+    if (!consumed.count) {
+      throw new UnauthorizedException({
+        code: 'AUTH_OTP_INVALID',
+        message: 'OTP is invalid or expired.',
+      });
+    }
   }
 
   private async enforceOtpRateLimit(identifier: string, purpose: OtpPurpose) {

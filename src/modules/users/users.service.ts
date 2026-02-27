@@ -16,6 +16,10 @@ import {
 } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
+import {
+  getIndianPhoneAliases,
+  normalizeIndianPhone,
+} from '../../common/utils/phone';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { AuthorizationService } from '../authorization/authorization.service';
 import { SubscriptionsService } from '../payments/subscriptions.service';
@@ -174,11 +178,16 @@ export class UsersService {
       });
     }
 
+    const phone = this.normalizeOptionalPhoneInput(dto.phone);
+    if (typeof phone === 'string') {
+      await this.assertPhoneAvailable(phone, userId);
+    }
+
     return this.prisma.user.update({
       where: { id: userId },
       data: {
         fullName: dto.fullName ?? undefined,
-        phone: dto.phone ?? undefined,
+        phone,
         lastActiveAt: new Date(),
       },
       select: {
@@ -236,9 +245,13 @@ export class UsersService {
     }
 
     const email = dto.email.trim().toLowerCase();
-    const phone = dto.phone?.trim() || undefined;
+    const phone = this.normalizeOptionalPhoneInput(dto.phone);
     const fullName = dto.fullName?.trim() || undefined;
     const passwordHash = await bcrypt.hash(dto.password, 10);
+
+    if (typeof phone === 'string') {
+      await this.assertPhoneAvailable(phone);
+    }
 
     try {
       const created = await this.prisma.$transaction(async (tx) => {
@@ -581,8 +594,12 @@ export class UsersService {
     }
 
     const email = dto.email?.trim().toLowerCase();
-    const phone = dto.phone?.trim();
+    const phone = this.normalizeOptionalPhoneInput(dto.phone);
     const fullName = dto.fullName?.trim();
+
+    if (typeof phone === 'string') {
+      await this.assertPhoneAvailable(phone, userId);
+    }
 
     try {
       const updated = await this.prisma.$transaction(async (tx) => {
@@ -590,7 +607,7 @@ export class UsersService {
           where: { id: userId },
           data: {
             email: email || undefined,
-            phone: phone === undefined ? undefined : phone || null,
+            phone,
             fullName: fullName === undefined ? undefined : fullName || null,
             status: dto.status ?? undefined,
             type: dto.type ?? undefined,
@@ -666,7 +683,7 @@ export class UsersService {
     return this.prisma.$transaction([
       this.prisma.user.update({
         where: { id: userId },
-        data: { status: UserStatus.BLOCKED },
+        data: { status: UserStatus.BLOCKED, activeStudentSessionId: null },
       }),
       this.prisma.refreshSession.updateMany({
         where: { userId, revokedAt: null },
@@ -701,15 +718,20 @@ export class UsersService {
 
     await this.assertCanMutateTargetUser(actorUserId, userId);
 
-    await this.prisma.refreshSession.updateMany({
-      where: { userId, revokedAt: null },
-      data: { revokedAt: new Date() },
-    });
-
-    await this.prisma.noteViewSession.updateMany({
-      where: { userId, revokedAt: null },
-      data: { revokedAt: new Date() },
-    });
+    await this.prisma.$transaction([
+      this.prisma.user.update({
+        where: { id: userId },
+        data: { activeStudentSessionId: null },
+      }),
+      this.prisma.refreshSession.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      }),
+      this.prisma.noteViewSession.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      }),
+    ]);
 
     return { success: true };
   }
@@ -1099,6 +1121,43 @@ export class UsersService {
     return (
       roleKey === SUPER_ADMIN_ROLE_KEY || roleKey.startsWith(ADMIN_ROLE_PREFIX)
     );
+  }
+
+  private normalizeOptionalPhoneInput(phone?: string) {
+    if (phone === undefined) {
+      return undefined;
+    }
+
+    const trimmed = phone.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    try {
+      return normalizeIndianPhone(trimmed);
+    } catch {
+      throw new BadRequestException({
+        code: 'USER_PHONE_INVALID',
+        message: 'Enter a valid Indian mobile number.',
+      });
+    }
+  }
+
+  private async assertPhoneAvailable(phone: string, excludeUserId?: string) {
+    const existing = await this.prisma.user.findFirst({
+      where: {
+        id: excludeUserId ? { not: excludeUserId } : undefined,
+        phone: { in: getIndianPhoneAliases(phone) },
+      },
+      select: { id: true },
+    });
+
+    if (existing) {
+      throw new BadRequestException({
+        code: 'USER_DUPLICATE_FIELD',
+        message: 'Email or phone already in use.',
+      });
+    }
   }
 
   private handleUniqueConstraint(error: unknown) {

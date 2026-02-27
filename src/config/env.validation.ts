@@ -21,6 +21,13 @@ export const envValidationSchema = Joi.object({
   JWT_REFRESH_SECRET: Joi.string().required(),
   JWT_ACCESS_TTL: Joi.string().default('15m'),
   JWT_REFRESH_TTL: Joi.string().default('30d'),
+  STUDENT_SINGLE_SESSION_ENFORCEMENT: Joi.boolean()
+    .truthy('true')
+    .falsy('false')
+    .default(true),
+  STUDENT_SINGLE_SESSION_STRATEGY: Joi.string()
+    .valid('FORCE_LOGOUT_EXISTING', 'DENY_NEW_LOGIN')
+    .default('FORCE_LOGOUT_EXISTING'),
 
   SUPERADMIN_EMAIL: Joi.string().email().required(),
   SUPERADMIN_PASSWORD: Joi.string().required(),

@@ -111,8 +111,8 @@ export class NoteAccessService {
 
     const payload = {
       displayName: user.fullName ?? user.email,
-      maskedEmail: user.email ? this.maskEmail(user.email) : undefined,
-      maskedPhone: user.phone ? this.maskPhone(user.phone) : undefined,
+      email: user.email || undefined,
+      phone: user.phone || undefined,
       userHash: this.sign(`${user.id}:${user.email}`),
       viewSessionId: session.id,
       watermarkSeed: session.watermarkSeed,
@@ -326,21 +326,6 @@ export class NoteAccessService {
 
   private compare(value: string, hash: string) {
     return this.sign(value) === hash;
-  }
-
-  private maskEmail(email: string) {
-    const [name, domain] = email.split('@');
-    if (!name || !domain) {
-      return email;
-    }
-    return `${name[0]}***@${domain}`;
-  }
-
-  private maskPhone(phone: string) {
-    if (phone.length < 4) {
-      return '****';
-    }
-    return `${'*'.repeat(Math.max(0, phone.length - 4))}${phone.slice(-4)}`;
   }
 
   private async assertNotBanned(noteId: string, userId: string) {

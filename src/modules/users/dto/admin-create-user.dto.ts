@@ -6,9 +6,11 @@ import {
   IsEnum,
   IsOptional,
   IsString,
+  Matches,
   MaxLength,
   MinLength,
 } from 'class-validator';
+import { INDIAN_PHONE_INPUT_REGEX } from '../../../common/utils/phone';
 
 export class AdminCreateUserDto {
   @IsEmail()
@@ -22,6 +24,9 @@ export class AdminCreateUserDto {
   @IsOptional()
   @IsString()
   @MaxLength(32)
+  @Matches(INDIAN_PHONE_INPUT_REGEX, {
+    message: 'Phone must be a valid Indian mobile number.',
+  })
   phone?: string;
 
   @IsOptional()

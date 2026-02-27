@@ -207,6 +207,7 @@ model User {
   fullName       String?
   type           UserType   @default(STUDENT)
   status         UserStatus @default(ACTIVE)
+  activeStudentSessionId String?
   emailVerifiedAt DateTime?
   phoneVerifiedAt DateTime?
   lastLoginAt    DateTime?

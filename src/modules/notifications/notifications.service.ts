@@ -452,6 +452,32 @@ export class NotificationsService implements OnModuleInit {
     });
   }
 
+  async sendOtpEmailToAddress(params: {
+    email: string;
+    otp: string;
+    expiresAt: Date;
+    purpose: string;
+  }) {
+    const appName = this.configService.get<string>('APP_NAME') ?? 'our app';
+    const expiresInMinutes = Math.max(
+      1,
+      Math.round((params.expiresAt.getTime() - Date.now()) / 60000),
+    );
+
+    const rendered = this.renderTemplate(
+      null,
+      {
+        appName,
+        otp: params.otp,
+        expiresInMinutes,
+        purpose: params.purpose,
+      },
+      OTP_FALLBACK,
+    );
+
+    await this.sendEmail(params.email, rendered);
+  }
+
   async sendPasswordResetEmail(params: {
     userId: string;
     email: string;

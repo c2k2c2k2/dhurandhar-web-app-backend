@@ -27,12 +27,12 @@ export class AuthTokenService implements IAuthTokenService {
       });
     }
 
+    const sessionId = randomUUID();
     const accessToken = await this.jwtService.signAsync(
-      { sub: userId, type, roles },
+      { sub: userId, type, roles, sid: sessionId },
       { expiresIn: accessTtlSeconds },
     );
 
-    const sessionId = randomUUID();
     const refreshToken = await this.jwtService.signAsync(
       { sub: userId, sid: sessionId },
       { expiresIn: refreshTtlSeconds, secret: refreshSecret },
