@@ -1,4 +1,10 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnModuleInit,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   AssetResourceType,
@@ -10,9 +16,12 @@ import {
 } from '@prisma/client';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
+import { execFile } from 'child_process';
 import { randomUUID } from 'crypto';
-import { readFileSync } from 'fs';
+import { constants as fsConstants, readFileSync } from 'fs';
+import { access } from 'fs/promises';
 import { join } from 'path';
+import { promisify } from 'util';
 import { MinioService } from '../files/minio.service';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { renderQuestionHtmlWithMath } from '../question-bank/utils/rich-content.util';
@@ -48,6 +57,22 @@ type PrintJobItemInput = {
   orderIndex: number;
   marks?: number | null;
 };
+
+type PlaywrightChromium = {
+  executablePath: () => string;
+  launch: (options: {
+    args?: string[];
+    channel?: string;
+    headless?: boolean;
+  }) => Promise<any>;
+};
+
+type PdfLaunchMode = {
+  channel?: 'chromium';
+  waitUntil?: 'domcontentloaded' | 'networkidle';
+};
+
+const execFileAsync = promisify(execFile);
 
 const DEFAULT_PAPER_TEMPLATE = `<!DOCTYPE html>
 <html>
@@ -101,11 +126,14 @@ const DEFAULT_ANSWER_TEMPLATE = `<!DOCTYPE html>
 </html>`;
 
 @Injectable()
-export class PrintEngineService {
+export class PrintEngineService implements OnModuleInit {
+  private static playwrightInstallPromise: Promise<void> | null = null;
   private readonly logger = new Logger(PrintEngineService.name);
   private readonly maxQuestions: number;
   private readonly maxEmbeddedBytes: number;
   private readonly useFakePdf: boolean;
+  private readonly autoInstallPlaywrightChromium: boolean;
+  private readonly requeueOnBootLimit: number;
   private readonly paperTemplate: string;
   private readonly answerTemplate: string;
   private readonly katexStyles: string;
@@ -124,6 +152,15 @@ export class PrintEngineService {
     const fakeEnv = this.configService.get<boolean | string>('PRINT_FAKE_PDF');
     this.useFakePdf =
       typeof fakeEnv === 'boolean' ? fakeEnv : fakeEnv === 'true';
+    const autoInstallEnv = this.configService.get<boolean | string>(
+      'PRINT_AUTO_INSTALL_PLAYWRIGHT_CHROMIUM',
+    );
+    this.autoInstallPlaywrightChromium =
+      typeof autoInstallEnv === 'boolean'
+        ? autoInstallEnv
+        : autoInstallEnv !== 'false';
+    this.requeueOnBootLimit =
+      this.configService.get<number>('PRINT_REQUEUE_ON_BOOT_LIMIT') ?? 100;
 
     this.paperTemplate = this.loadTemplate(
       'paper.html',
@@ -137,6 +174,10 @@ export class PrintEngineService {
   }
 
   // BullMQ worker is managed via @nestjs/bullmq Processor.
+
+  async onModuleInit() {
+    await this.requeueQueuedJobsOnBoot();
+  }
 
   async createJob(userId: string, dto: PrintJobCreateDto) {
     const { config, items } = await this.resolveJobItems(dto);
@@ -326,7 +367,7 @@ export class PrintEngineService {
       },
     });
 
-    await this.enqueue(jobId);
+    await this.enqueue(jobId, { forceReset: true });
     return updated;
   }
 
@@ -346,15 +387,32 @@ export class PrintEngineService {
       });
     }
 
-    return this.prisma.printJob.update({
+    const updated = await this.prisma.printJob.update({
       where: { id: jobId },
       data: { status: PrintJobStatus.CANCELLED },
     });
+    await this.removeExistingQueueJob(jobId);
+    return updated;
   }
 
-  private async enqueue(jobId: string) {
+  private async enqueue(jobId: string, options?: { forceReset?: boolean }) {
+    const addToQueue = () =>
+      this.printQueue.add('print', { jobId }, this.getQueueJobOptions(jobId));
+
+    if (options?.forceReset) {
+      await this.removeExistingQueueJob(jobId);
+    }
+
     try {
-      await this.printQueue.add('print', { jobId }, { jobId });
+      let queued = await addToQueue();
+      const state = await queued.getState();
+      if (state === 'failed' || state === 'completed') {
+        this.logger.warn(
+          `Queue job ${jobId} is ${state}; removing stale entry and re-enqueueing.`,
+        );
+        await this.removeExistingQueueJob(jobId);
+        queued = await addToQueue();
+      }
       return;
     } catch (err) {
       this.logger.warn(
@@ -367,6 +425,57 @@ export class PrintEngineService {
         this.logger.error(`Print job ${jobId} failed`, err?.stack ?? err),
       );
     });
+  }
+
+  private getQueueJobOptions(jobId: string) {
+    return {
+      jobId,
+      removeOnComplete: 1000,
+      removeOnFail: 1000,
+    };
+  }
+
+  private async removeExistingQueueJob(jobId: string) {
+    try {
+      const existing = await this.printQueue.getJob(jobId);
+      if (!existing) return;
+      const state = await existing.getState();
+      if (state === 'active') {
+        this.logger.warn(
+          `Queue job ${jobId} is active and cannot be removed safely.`,
+        );
+        return;
+      }
+      await existing.remove();
+      this.logger.debug(`Removed existing queue job ${jobId} (${state}).`);
+    } catch (err) {
+      this.logger.warn(
+        `Failed removing existing queue job ${jobId}: ${this.formatError(err)}`,
+      );
+    }
+  }
+
+  private async requeueQueuedJobsOnBoot() {
+    try {
+      const queued = await this.prisma.printJob.findMany({
+        where: { status: PrintJobStatus.QUEUED },
+        orderBy: { createdAt: 'asc' },
+        take: this.requeueOnBootLimit,
+        select: { id: true },
+      });
+      if (queued.length === 0) return;
+
+      this.logger.log(
+        `Re-enqueueing ${queued.length} queued print jobs on boot.`,
+      );
+      for (const item of queued) {
+        await this.enqueue(item.id, { forceReset: true });
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Unable to re-enqueue queued print jobs on boot: ${this.formatError(err)}`,
+      );
+    }
   }
 
   async processJob(jobId: string) {
@@ -658,12 +767,203 @@ export class PrintEngineService {
 
   private async renderPdf(html: string) {
     const { chromium } = await import('playwright');
-    const browser = await chromium.launch({ args: ['--no-sandbox'] });
-    const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'networkidle' });
-    const buffer = await page.pdf({ format: 'A4', printBackground: true });
-    await browser.close();
-    return buffer;
+    const browserType = chromium as PlaywrightChromium;
+    await this.ensurePlaywrightChromium(browserType);
+
+    try {
+      return await this.tryRenderPdfWithRecovery(browserType, html, {
+        channel: 'chromium',
+        waitUntil: 'networkidle',
+      });
+    } catch (firstErr) {
+      if (!this.isPdfPrintingFailedError(firstErr)) {
+        throw firstErr;
+      }
+      this.logger.warn(
+        'Playwright printToPDF failed in Chromium channel; retrying in headless shell mode.',
+      );
+    }
+
+    try {
+      return await this.tryRenderPdfWithRecovery(browserType, html, {
+        waitUntil: 'domcontentloaded',
+      });
+    } catch (secondErr) {
+      if (!this.isPdfPrintingFailedError(secondErr)) {
+        throw secondErr;
+      }
+      this.logger.warn(
+        'Playwright printToPDF failed again; retrying without embedded images in Chromium channel.',
+      );
+    }
+
+    const fallbackHtml = this.stripImagesFromHtml(html);
+    return this.tryRenderPdfWithRecovery(browserType, fallbackHtml, {
+      channel: 'chromium',
+      waitUntil: 'domcontentloaded',
+    });
+  }
+
+  private async tryRenderPdfWithRecovery(
+    chromium: PlaywrightChromium,
+    html: string,
+    mode: PdfLaunchMode,
+  ) {
+    try {
+      return await this.renderPdfWithChromium(chromium, html, mode);
+    } catch (err) {
+      if (this.isMissingDependenciesError(err)) {
+        throw new Error(
+          'Playwright Chromium dependencies are missing on this host. On Linux/Coolify, run "pnpm exec playwright install --with-deps chromium" during build.',
+        );
+      }
+      if (
+        !this.autoInstallPlaywrightChromium ||
+        !this.isMissingExecutableError(err)
+      ) {
+        throw err;
+      }
+
+      this.logger.warn(
+        'Chromium executable missing during launch; reinstalling Playwright Chromium and retrying once.',
+      );
+      await this.installPlaywrightChromium();
+      await this.ensurePlaywrightChromium(chromium);
+      return this.renderPdfWithChromium(chromium, html, mode);
+    }
+  }
+
+  private async renderPdfWithChromium(
+    chromium: PlaywrightChromium,
+    html: string,
+    mode: PdfLaunchMode = {},
+  ) {
+    const { channel, waitUntil = 'networkidle' } = mode;
+    const browser = await chromium.launch({
+      channel,
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+      ],
+    });
+    try {
+      const page = await browser.newPage();
+      await page.setContent(html, { waitUntil });
+      const buffer = await page.pdf({ format: 'A4', printBackground: true });
+      return buffer;
+    } finally {
+      await browser.close();
+    }
+  }
+
+  private stripImagesFromHtml(html: string) {
+    return html.replace(
+      /<img\b[^>]*>/gi,
+      '<div style="font-style:italic;color:#64748b;">[Image omitted in fallback PDF]</div>',
+    );
+  }
+
+  private async ensurePlaywrightChromium(chromium: PlaywrightChromium) {
+    const executablePath = this.getChromiumExecutablePath(chromium);
+    if (executablePath && (await this.pathExists(executablePath))) {
+      return;
+    }
+
+    if (!this.autoInstallPlaywrightChromium) {
+      const location = executablePath ? ` at ${executablePath}` : '';
+      throw new Error(
+        `Playwright Chromium executable is missing${location}. Run "pnpm run playwright:install".`,
+      );
+    }
+
+    const location = executablePath ? ` at ${executablePath}` : '';
+    this.logger.warn(
+      `Playwright Chromium executable missing${location}; installing browser binaries.`,
+    );
+    await this.installPlaywrightChromium();
+
+    const installedPath = this.getChromiumExecutablePath(chromium);
+    if (installedPath && (await this.pathExists(installedPath))) {
+      return;
+    }
+
+    const installedLocation = installedPath ? ` at ${installedPath}` : '';
+    throw new Error(
+      `Playwright Chromium installation completed, but executable is still missing${installedLocation}.`,
+    );
+  }
+
+  private getChromiumExecutablePath(chromium: PlaywrightChromium) {
+    try {
+      const executablePath = chromium.executablePath();
+      return executablePath?.trim() ? executablePath : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async installPlaywrightChromium() {
+    if (!PrintEngineService.playwrightInstallPromise) {
+      PrintEngineService.playwrightInstallPromise =
+        this.runPlaywrightChromiumInstall().finally(() => {
+          PrintEngineService.playwrightInstallPromise = null;
+        });
+    }
+    return PrintEngineService.playwrightInstallPromise;
+  }
+
+  private async runPlaywrightChromiumInstall() {
+    const cliPath = require.resolve('playwright/cli');
+    try {
+      const result = await execFileAsync(
+        process.execPath,
+        [cliPath, 'install', 'chromium'],
+        {
+          maxBuffer: 10 * 1024 * 1024,
+        },
+      );
+      const stderr = result.stderr?.trim();
+      if (stderr) {
+        this.logger.debug(`Playwright install stderr: ${stderr}`);
+      }
+    } catch (err: any) {
+      const stderr = err?.stderr ? String(err.stderr).trim() : '';
+      const stdout = err?.stdout ? String(err.stdout).trim() : '';
+      const details = [stderr, stdout].filter(Boolean).join(' | ');
+      throw new Error(
+        `Failed to install Playwright Chromium automatically.${details ? ` ${details}` : ''}`,
+      );
+    }
+  }
+
+  private async pathExists(path: string) {
+    try {
+      await access(path, fsConstants.F_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private isMissingExecutableError(err: any) {
+    const message = this.formatError(err).toLowerCase();
+    return (
+      message.includes(`executable doesn't exist`) ||
+      (message.includes('failed to launch') && message.includes('browser')) ||
+      message.includes('browser executable')
+    );
+  }
+
+  private isMissingDependenciesError(err: any) {
+    const message = this.formatError(err).toLowerCase();
+    return message.includes('host system is missing dependencies');
+  }
+
+  private isPdfPrintingFailedError(err: any) {
+    const message = this.formatError(err).toLowerCase();
+    return message.includes('printing failed') || message.includes('page.printtopdf');
   }
 
   private buildFakePdf(job: { id: string }) {

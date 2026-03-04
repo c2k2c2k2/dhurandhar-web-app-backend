@@ -34,7 +34,14 @@ export class PrintJobsConsumer extends WorkerHost {
       return;
     }
 
-    await this.printEngineService.processJob(jobId);
+    try {
+      await this.printEngineService.processJob(jobId);
+    } catch (err: any) {
+      this.logger.error(
+        `Print job ${jobId} execution failed`,
+        err?.stack ?? String(err),
+      );
+    }
   }
 
   @OnWorkerEvent('failed')

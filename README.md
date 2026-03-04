@@ -44,6 +44,21 @@ $ pnpm run start:dev
 $ pnpm run start:prod
 ```
 
+## Playwright setup (Print PDFs)
+
+Print job PDF generation uses Playwright Chromium.
+
+```bash
+# install Chromium browser binaries
+$ pnpm run playwright:install
+```
+
+If you deploy on Coolify/Nixpacks, make sure this command runs during build (or keep `PRINT_AUTO_INSTALL_PLAYWRIGHT_CHROMIUM=true` so the service can self-heal on first print job).
+
+Print queue durability knobs:
+- `PRINT_REQUEUE_ON_BOOT_LIMIT` re-enqueues orphaned DB `QUEUED` print jobs on startup.
+- `PRINT_AUTO_INSTALL_PLAYWRIGHT_CHROMIUM` auto-installs browser binaries if missing.
+
 ## Run tests
 
 ```bash
