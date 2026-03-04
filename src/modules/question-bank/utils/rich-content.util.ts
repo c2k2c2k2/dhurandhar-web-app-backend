@@ -31,7 +31,7 @@ const QUESTION_ALLOWED_TAGS = [
 ] as const;
 
 const QUESTION_ALLOWED_ATTRIBUTES: Record<string, string[]> = {
-  span: ['data-question-math-inline', 'class'],
+  span: ['data-question-font', 'data-question-math-inline', 'class'],
   div: ['data-question-math-block', 'class'],
   th: ['colspan', 'rowspan'],
   td: ['colspan', 'rowspan'],
