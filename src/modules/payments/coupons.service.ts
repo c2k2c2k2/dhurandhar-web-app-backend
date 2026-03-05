@@ -94,4 +94,33 @@ export class CouponsService {
       },
     });
   }
+
+  async deleteCoupon(couponId: string) {
+    const coupon = await this.prisma.coupon.findUnique({
+      where: { id: couponId },
+      select: { id: true },
+    });
+    if (!coupon) {
+      throw new NotFoundException({
+        code: 'COUPON_NOT_FOUND',
+        message: 'Coupon not found.',
+      });
+    }
+
+    const [orderCount, redemptionCount] = await this.prisma.$transaction([
+      this.prisma.paymentOrder.count({ where: { couponId } }),
+      this.prisma.couponRedemption.count({ where: { couponId } }),
+    ]);
+
+    if (orderCount + redemptionCount > 0) {
+      throw new BadRequestException({
+        code: 'COUPON_DELETE_CONFLICT',
+        message: 'Cannot delete a coupon that has already been used.',
+        details: { orderCount, redemptionCount },
+      });
+    }
+
+    await this.prisma.coupon.delete({ where: { id: couponId } });
+    return { success: true };
+  }
 }

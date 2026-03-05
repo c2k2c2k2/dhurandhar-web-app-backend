@@ -185,6 +185,26 @@ export class CmsService {
     });
   }
 
+  async deleteBanner(bannerId: string) {
+    const banner = await this.prisma.banner.findUnique({
+      where: { id: bannerId },
+      select: { id: true },
+    });
+    if (!banner) {
+      throw new NotFoundException({
+        code: 'CMS_BANNER_NOT_FOUND',
+        message: 'Banner not found.',
+      });
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await this.syncAssetReferences(AssetResourceType.BANNER, bannerId, [], tx);
+      await tx.banner.delete({ where: { id: bannerId } });
+    });
+
+    return { success: true };
+  }
+
   async listAnnouncementsAdmin(page = 1, pageSize = 20) {
     const [total, data] = await this.prisma.$transaction([
       this.prisma.announcement.count(),
@@ -265,6 +285,31 @@ export class CmsService {
     });
   }
 
+  async deleteAnnouncement(announcementId: string) {
+    const announcement = await this.prisma.announcement.findUnique({
+      where: { id: announcementId },
+      select: { id: true },
+    });
+    if (!announcement) {
+      throw new NotFoundException({
+        code: 'CMS_ANNOUNCEMENT_NOT_FOUND',
+        message: 'Announcement not found.',
+      });
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await this.syncAssetReferences(
+        AssetResourceType.ANNOUNCEMENT,
+        announcementId,
+        [],
+        tx,
+      );
+      await tx.announcement.delete({ where: { id: announcementId } });
+    });
+
+    return { success: true };
+  }
+
   async listHomeSectionsAdmin(page = 1, pageSize = 50) {
     const [total, data] = await this.prisma.$transaction([
       this.prisma.homeSection.count(),
@@ -339,6 +384,26 @@ export class CmsService {
 
       return updated;
     });
+  }
+
+  async deleteHomeSection(sectionId: string) {
+    const section = await this.prisma.homeSection.findUnique({
+      where: { id: sectionId },
+      select: { id: true },
+    });
+    if (!section) {
+      throw new NotFoundException({
+        code: 'CMS_HOME_SECTION_NOT_FOUND',
+        message: 'Home section not found.',
+      });
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await this.syncAssetReferences(AssetResourceType.HOME_SECTION, sectionId, [], tx);
+      await tx.homeSection.delete({ where: { id: sectionId } });
+    });
+
+    return { success: true };
   }
 
   async reorderHomeSections(dto: HomeSectionReorderDto) {
@@ -441,6 +506,26 @@ export class CmsService {
 
       return updated;
     });
+  }
+
+  async deletePage(pageId: string) {
+    const pageRecord = await this.prisma.page.findUnique({
+      where: { id: pageId },
+      select: { id: true },
+    });
+    if (!pageRecord) {
+      throw new NotFoundException({
+        code: 'CMS_PAGE_NOT_FOUND',
+        message: 'Page not found.',
+      });
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await this.syncAssetReferences(AssetResourceType.PAGE, pageId, [], tx);
+      await tx.page.delete({ where: { id: pageId } });
+    });
+
+    return { success: true };
   }
 
   async publishPage(pageId: string) {

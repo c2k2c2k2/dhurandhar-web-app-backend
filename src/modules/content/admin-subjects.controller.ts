@@ -1,4 +1,4 @@
-import { Body, Controller, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Policy, RequireUserType } from '../authorization/decorators';
 import { JwtAuthGuard } from '../auth/guards';
@@ -25,5 +25,12 @@ export class AdminSubjectsController {
   @Policy('content.manage')
   updateSubject(@Param('subjectId') subjectId: string, @Body() dto: SubjectUpdateDto) {
     return this.subjectsService.updateSubject(subjectId, dto);
+  }
+
+  @Delete(':subjectId')
+  @RequireUserType('ADMIN')
+  @Policy('content.manage')
+  deleteSubject(@Param('subjectId') subjectId: string) {
+    return this.subjectsService.deleteSubject(subjectId);
   }
 }

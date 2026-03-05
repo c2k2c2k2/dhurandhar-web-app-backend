@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Audit, CurrentUser } from '../../common/decorators';
 import { JwtAuthGuard } from '../auth/guards';
@@ -58,5 +68,13 @@ export class AdminTestsController {
   @Audit('tests.unpublish', 'Test')
   unpublishTest(@Param('testId') testId: string) {
     return this.testEngineService.unpublishTest(testId);
+  }
+
+  @Delete(':testId')
+  @RequireUserType('ADMIN')
+  @Policy('tests.crud')
+  @Audit('tests.delete', 'Test')
+  deleteTest(@Param('testId') testId: string) {
+    return this.testEngineService.deleteTest(testId);
   }
 }

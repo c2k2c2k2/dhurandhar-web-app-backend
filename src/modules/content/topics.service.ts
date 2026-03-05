@@ -83,6 +83,46 @@ export class TopicsService {
     });
   }
 
+  async deleteTopic(topicId: string) {
+    const topic = await this.prisma.topic.findUnique({
+      where: { id: topicId },
+      select: { id: true },
+    });
+    if (!topic) {
+      throw new NotFoundException({
+        code: 'TOPIC_NOT_FOUND',
+        message: 'Topic not found.',
+      });
+    }
+
+    const [childCount, noteCount, questionCount, practiceCount, progressCount] =
+      await this.prisma.$transaction([
+        this.prisma.topic.count({ where: { parentId: topicId } }),
+        this.prisma.noteTopic.count({ where: { topicId } }),
+        this.prisma.question.count({ where: { topicId } }),
+        this.prisma.practiceSession.count({ where: { topicId } }),
+        this.prisma.userTopicProgress.count({ where: { topicId } }),
+      ]);
+
+    if (childCount + noteCount + questionCount + practiceCount + progressCount > 0) {
+      throw new BadRequestException({
+        code: 'TOPIC_DELETE_CONFLICT',
+        message:
+          'Cannot delete a topic with children or linked notes/questions/practice data.',
+        details: {
+          childCount,
+          noteCount,
+          questionCount,
+          practiceCount,
+          progressCount,
+        },
+      });
+    }
+
+    await this.prisma.topic.delete({ where: { id: topicId } });
+    return { success: true };
+  }
+
   private async assertNoCycle(topicId: string, parentId: string) {
     let currentId: string | null = parentId;
     let safety = 0;

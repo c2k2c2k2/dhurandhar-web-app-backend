@@ -218,6 +218,39 @@ export class NotificationsService implements OnModuleInit {
     });
   }
 
+  async deleteTemplate(templateId: string) {
+    const template = await this.prisma.notificationTemplate.findUnique({
+      where: { id: templateId },
+      select: { id: true },
+    });
+    if (!template) {
+      throw new NotFoundException({
+        code: 'NOTIFICATIONS_TEMPLATE_NOT_FOUND',
+        message: 'Template not found.',
+      });
+    }
+
+    const [messageCount, broadcastCount] = await this.prisma.$transaction([
+      this.prisma.notificationMessage.count({ where: { templateId } }),
+      this.prisma.broadcast.count({ where: { templateId } }),
+    ]);
+
+    if (messageCount + broadcastCount > 0) {
+      throw new BadRequestException({
+        code: 'NOTIFICATIONS_TEMPLATE_DELETE_CONFLICT',
+        message:
+          'Cannot delete a template that is linked to notification messages or broadcasts.',
+        details: { messageCount, broadcastCount },
+      });
+    }
+
+    await this.prisma.notificationTemplate.delete({
+      where: { id: templateId },
+    });
+
+    return { success: true };
+  }
+
   async listMessages(query: NotificationMessageQueryDto) {
     const page = Number(query.page ?? 1);
     const pageSize = Number(query.pageSize ?? 20);
@@ -421,6 +454,29 @@ export class NotificationsService implements OnModuleInit {
       where: { id: broadcastId },
       data: { status: BroadcastStatus.CANCELLED },
     });
+  }
+
+  async deleteBroadcast(broadcastId: string) {
+    const broadcast = await this.prisma.broadcast.findUnique({
+      where: { id: broadcastId },
+      select: { id: true, status: true },
+    });
+    if (!broadcast) {
+      throw new NotFoundException({
+        code: 'BROADCAST_NOT_FOUND',
+        message: 'Broadcast not found.',
+      });
+    }
+
+    if (broadcast.status === BroadcastStatus.SENT) {
+      throw new BadRequestException({
+        code: 'BROADCAST_DELETE_INVALID',
+        message: 'Sent broadcasts cannot be deleted.',
+      });
+    }
+
+    await this.prisma.broadcast.delete({ where: { id: broadcastId } });
+    return { success: true };
   }
 
   async sendOtpEmail(params: {

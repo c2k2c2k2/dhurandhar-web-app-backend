@@ -1,4 +1,13 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Audit, CurrentUser } from '../../common/decorators';
 import { JwtAuthGuard } from '../auth/guards';
@@ -49,5 +58,13 @@ export class AdminBroadcastsController {
   @Audit('notifications.broadcast.cancel', 'Broadcast')
   cancelBroadcast(@Param('broadcastId') broadcastId: string) {
     return this.notificationsService.cancelBroadcast(broadcastId);
+  }
+
+  @Delete(':broadcastId')
+  @RequireUserType('ADMIN')
+  @Policy('notifications.manage')
+  @Audit('notifications.broadcast.delete', 'Broadcast')
+  deleteBroadcast(@Param('broadcastId') broadcastId: string) {
+    return this.notificationsService.deleteBroadcast(broadcastId);
   }
 }

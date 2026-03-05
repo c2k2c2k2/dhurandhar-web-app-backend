@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Audit, CurrentUser } from '../../common/decorators';
 import { Policy, RequireUserType } from '../authorization/decorators';
@@ -44,6 +54,14 @@ export class AdminQuestionsController {
   @Audit('questions.unpublish', 'Question')
   unpublish(@Param('questionId') questionId: string) {
     return this.questionBankService.unpublishQuestion(questionId);
+  }
+
+  @Delete(':questionId')
+  @RequireUserType('ADMIN')
+  @Policy('questions.crud')
+  @Audit('questions.delete', 'Question')
+  deleteQuestion(@Param('questionId') questionId: string) {
+    return this.questionBankService.deleteQuestion(questionId);
   }
 
   @Get()

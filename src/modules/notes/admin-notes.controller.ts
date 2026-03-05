@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Audit, CurrentUser } from '../../common/decorators';
 import { Policy, RequireUserType } from '../authorization/decorators';
@@ -52,6 +62,14 @@ export class AdminNotesController {
   @Audit('notes.unpublish', 'Note')
   unpublish(@Param('noteId') noteId: string) {
     return this.notesService.unpublishNote(noteId);
+  }
+
+  @Delete(':noteId')
+  @RequireUserType('ADMIN')
+  @Policy('notes.write')
+  @Audit('notes.delete', 'Note')
+  deleteNote(@Param('noteId') noteId: string) {
+    return this.notesService.deleteNote(noteId);
   }
 
   @Post('bulk-publish')

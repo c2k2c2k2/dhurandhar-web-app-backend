@@ -230,6 +230,37 @@ export class PlansService {
     return this.serializePlan(updated);
   }
 
+  async deletePlan(planId: string) {
+    const plan = await this.prisma.plan.findUnique({
+      where: { id: planId },
+      select: { id: true },
+    });
+    if (!plan) {
+      throw new NotFoundException({
+        code: 'PLAN_NOT_FOUND',
+        message: 'Plan not found.',
+      });
+    }
+
+    const [subscriptionCount, orderCount, mandateCount] =
+      await this.prisma.$transaction([
+        this.prisma.subscription.count({ where: { planId } }),
+        this.prisma.paymentOrder.count({ where: { planId } }),
+        this.prisma.paymentMandate.count({ where: { planId } }),
+      ]);
+
+    if (subscriptionCount + orderCount + mandateCount > 0) {
+      throw new BadRequestException({
+        code: 'PLAN_DELETE_CONFLICT',
+        message: 'Cannot delete a plan that is linked to subscriptions or payments.',
+        details: { subscriptionCount, orderCount, mandateCount },
+      });
+    }
+
+    await this.prisma.plan.delete({ where: { id: planId } });
+    return { success: true };
+  }
+
   private serializePlan(plan: {
     id: string;
     key: string;

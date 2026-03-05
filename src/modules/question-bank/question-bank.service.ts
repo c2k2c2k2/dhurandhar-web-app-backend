@@ -131,6 +131,33 @@ export class QuestionBankService {
     });
   }
 
+  async deleteQuestion(questionId: string) {
+    const existing = await this.prisma.question.findUnique({
+      where: { id: questionId },
+      select: { id: true },
+    });
+    if (!existing) {
+      throw new NotFoundException({
+        code: 'QUESTION_NOT_FOUND',
+        message: 'Question not found.',
+      });
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.assetReference.deleteMany({
+        where: {
+          resourceType: AssetResourceType.QUESTION,
+          resourceId: questionId,
+        },
+      }),
+      this.prisma.question.delete({
+        where: { id: questionId },
+      }),
+    ]);
+
+    return { success: true };
+  }
+
   async listAdminQuestions(query: QuestionQueryDto) {
     const where = {
       subjectId: query.subjectId ?? undefined,

@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Audit, CurrentUser } from '../../common/decorators';
 import { JwtAuthGuard } from '../auth/guards';
@@ -43,5 +53,13 @@ export class AdminHomeSectionsController {
   @Audit('cms.home_section.reorder', 'HomeSection')
   reorder(@Body() dto: HomeSectionReorderDto) {
     return this.cmsService.reorderHomeSections(dto);
+  }
+
+  @Delete(':sectionId')
+  @RequireUserType('ADMIN')
+  @Policy('admin.config.write')
+  @Audit('cms.home_section.delete', 'HomeSection')
+  deleteSection(@Param('sectionId') sectionId: string) {
+    return this.cmsService.deleteHomeSection(sectionId);
   }
 }

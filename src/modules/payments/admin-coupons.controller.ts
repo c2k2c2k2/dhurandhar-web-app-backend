@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Audit } from '../../common/decorators';
 import { JwtAuthGuard } from '../auth/guards';
@@ -35,5 +45,13 @@ export class AdminCouponsController {
   @Audit('coupons.update', 'Coupon')
   updateCoupon(@Param('couponId') couponId: string, @Body() dto: CouponUpdateDto) {
     return this.couponsService.updateCoupon(couponId, dto);
+  }
+
+  @Delete(':couponId')
+  @RequireUserType('ADMIN')
+  @Policy('admin.config.write')
+  @Audit('coupons.delete', 'Coupon')
+  deleteCoupon(@Param('couponId') couponId: string) {
+    return this.couponsService.deleteCoupon(couponId);
   }
 }

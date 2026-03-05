@@ -3,39 +3,279 @@
   <head>
     <meta charset="utf-8" />
     <style>
-      body { font-family: "Times New Roman", serif; margin: 32px; color: #111; }
-      h1 { font-size: 22px; margin-bottom: 4px; }
-      .subtitle { margin: 0 0 16px 0; color: #555; }
-      .question { margin-bottom: 14px; }
-      .statement p { margin: 0 0 8px 0; }
-      .statement table { width: 100%; border-collapse: collapse; margin: 8px 0; }
-      .statement table th, .statement table td { border: 1px solid #cbd5e1; padding: 6px 8px; vertical-align: top; }
-      .statement table th { background: #f8fafc; }
-      .statement .font-marathi-shree-dev, .statement .font-legacy-marathi, .statement [data-question-font="shree-dev"] {
+      @page {
+        size: legal portrait;
+        margin: 12mm 10mm 12mm 10mm;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+      }
+
+      body {
+        margin: 0;
+        color: #111;
+        font-family: "Times New Roman", "Noto Sans Devanagari", serif;
+        font-size: 13px;
+        line-height: 1.36;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+      }
+
+      {{fontFaceStyles}}
+
+      .paper-shell {
+        width: 100%;
+      }
+
+      .paper-header {
+        border: 1.6px solid #0f172a;
+        border-radius: 14px;
+        padding: 10px 14px 8px;
+        margin-bottom: 10px;
+      }
+
+      .paper-header-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .paper-meta {
+        width: 26%;
+        font-size: 13px;
+        line-height: 1.35;
+      }
+
+      .paper-meta.right {
+        text-align: right;
+      }
+
+      .paper-meta-label {
+        font-weight: 700;
+      }
+
+      .paper-brand {
+        width: 48%;
+        text-align: center;
+      }
+
+      .paper-brand-name {
+        margin: 0;
+        font-size: 30px;
+        line-height: 1.05;
+        font-style: italic;
+        font-weight: 700;
+      }
+
+      .paper-brand-meta {
+        margin: 2px 0 0;
+        font-size: 11.5px;
+        letter-spacing: 0.15px;
+      }
+
+      .paper-title {
+        margin: 8px 0 0;
+        text-align: center;
+        font-size: 25px;
+        line-height: 1.25;
+        font-weight: 700;
+      }
+
+      .paper-subtitle {
+        margin: 2px 0 0;
+        text-align: center;
+        font-size: 12px;
+      }
+
+      .questions {
+        margin: 0;
+        padding-left: 22px;
+        column-count: 2;
+        column-gap: 16px;
+        column-fill: auto;
+      }
+
+      .question {
+        break-inside: avoid-column;
+        page-break-inside: avoid;
+        margin: 0 0 7px;
+        padding-right: 4px;
+      }
+
+      .question::marker {
+        font-weight: 700;
+      }
+
+      .statement p {
+        margin: 0 0 3px;
+      }
+
+      .statement p:last-child {
+        margin-bottom: 0;
+      }
+
+      .statement ul,
+      .statement ol {
+        margin: 0 0 3px;
+        padding-left: 16px;
+      }
+
+      .statement li {
+        margin-bottom: 2px;
+      }
+
+      .statement table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 4px 0;
+        table-layout: fixed;
+      }
+
+      .statement table th,
+      .statement table td {
+        border: 1px solid #a5b4c3;
+        padding: 3px 5px;
+        vertical-align: top;
+        word-break: break-word;
+      }
+
+      .statement table th {
+        background: #f1f5f9;
+      }
+
+      .statement img {
+        display: block;
+        max-width: 100%;
+        max-height: 160px;
+        height: auto;
+        object-fit: contain;
+        margin: 4px 0;
+      }
+
+      .question .options {
+        margin: 3px 0 0;
+        padding: 0;
+        list-style: none;
+        counter-reset: option;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 2px 12px;
+      }
+
+      .question .options > li {
+        margin: 0;
+        break-inside: avoid;
+        display: flex;
+        align-items: flex-start;
+        gap: 4px;
+      }
+
+      .question .options > li::before {
+        counter-increment: option;
+        content: counter(option) ") ";
+        font-weight: 700;
+        min-width: 14px;
+      }
+
+      .question .options > li > p {
+        margin: 0;
+      }
+
+      .statement .font-marathi-shree-dev,
+      .statement .font-legacy-marathi,
+      .statement [data-question-font="shree-dev"],
+      .question .options .font-marathi-shree-dev,
+      .question .options .font-legacy-marathi,
+      .question .options [data-question-font="shree-dev"] {
         font-family: "Shree-Dev", "Shree Dev 0708", "Noto Sans Devanagari", serif;
-        font-size: 1.12em;
-        line-height: 1.65;
+        font-size: 1.14em;
+        line-height: 1.56;
       }
-      .statement .font-marathi-surekh, .statement .font-marathi-sulekha, .statement [data-question-font="surekh"], .statement [data-question-font="sulekha"] {
+
+      .statement .font-marathi-surekh,
+      .statement .font-marathi-sulekha,
+      .statement [data-question-font="surekh"],
+      .statement [data-question-font="sulekha"],
+      .question .options .font-marathi-surekh,
+      .question .options .font-marathi-sulekha,
+      .question .options [data-question-font="surekh"],
+      .question .options [data-question-font="sulekha"] {
         font-family: "Surekh", "Sulekha", "Noto Sans Devanagari", serif;
-        font-size: 1.12em;
-        line-height: 1.65;
+        font-size: 1.14em;
+        line-height: 1.56;
       }
-      .options { margin: 0; padding-left: 18px; }
-      .options li { margin-bottom: 6px; }
-      img { max-width: 100%; height: auto; }
-      .page-break { page-break-before: always; }
-      .question-math-block { margin: 8px 0; }
+
+      .question-math-inline .katex {
+        font-size: 1.05em;
+      }
+
+      .question-math-block {
+        margin: 4px 0;
+      }
+
+      .question-math-block .katex-display {
+        margin: 0.3em 0;
+      }
+
+      .page-break {
+        page-break-before: always;
+        break-before: page;
+      }
+
+      .answer-key {
+        font-size: 13px;
+      }
+
+      .answer-key h2 {
+        margin: 0 0 8px;
+        font-size: 20px;
+      }
+
+      .answer-key ol {
+        margin: 0;
+        padding-left: 20px;
+        columns: 2;
+        column-gap: 16px;
+      }
+
+      .answer-key li {
+        break-inside: avoid;
+        margin-bottom: 4px;
+      }
+
       {{katexStyles}}
     </style>
   </head>
   <body>
-    <header>
-      <h1>{{title}}</h1>
-      <p class="subtitle">{{subtitle}}</p>
-    </header>
-    <ol class="questions">
-      {{content}}
-    </ol>
+    <main class="paper-shell">
+      <header class="paper-header">
+        <div class="paper-header-row">
+          <div class="paper-meta">
+            <div><span class="paper-meta-label">Time:</span> {{durationLabel}}</div>
+            <div><span class="paper-meta-label">Marks:</span> {{marksLabel}}</div>
+          </div>
+          <div class="paper-brand">
+            <h1 class="paper-brand-name">{{brandName}}</h1>
+            {{brandMetaBlock}}
+          </div>
+          <div class="paper-meta right">
+            <div><span class="paper-meta-label">Date:</span> {{paperDate}}</div>
+            <div><span class="paper-meta-label">Questions:</span> {{questionCountLabel}}</div>
+          </div>
+        </div>
+        <h2 class="paper-title">{{title}}</h2>
+        {{subtitleBlock}}
+      </header>
+      <ol class="questions">
+        {{content}}
+      </ol>
+    </main>
   </body>
 </html>

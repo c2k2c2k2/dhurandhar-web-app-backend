@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Audit } from '../../common/decorators';
 import { Policy, RequireUserType } from '../authorization/decorators';
@@ -35,5 +45,13 @@ export class AdminPlansController {
   @Audit('plans.update', 'Plan')
   updatePlan(@Param('planId') planId: string, @Body() dto: PlanUpdateDto) {
     return this.plansService.updatePlan(planId, dto);
+  }
+
+  @Delete(':planId')
+  @RequireUserType('ADMIN')
+  @Policy('admin.config.write')
+  @Audit('plans.delete', 'Plan')
+  deletePlan(@Param('planId') planId: string) {
+    return this.plansService.deletePlan(planId);
   }
 }

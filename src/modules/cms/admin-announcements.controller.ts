@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Audit, CurrentUser } from '../../common/decorators';
 import { JwtAuthGuard } from '../auth/guards';
@@ -41,5 +51,13 @@ export class AdminAnnouncementsController {
     @Body() dto: AnnouncementUpdateDto,
   ) {
     return this.cmsService.updateAnnouncement(announcementId, dto);
+  }
+
+  @Delete(':announcementId')
+  @RequireUserType('ADMIN')
+  @Policy('admin.config.write')
+  @Audit('cms.announcement.delete', 'Announcement')
+  deleteAnnouncement(@Param('announcementId') announcementId: string) {
+    return this.cmsService.deleteAnnouncement(announcementId);
   }
 }

@@ -1,4 +1,4 @@
-import { Body, Controller, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Policy, RequireUserType } from '../authorization/decorators';
 import { JwtAuthGuard } from '../auth/guards';
@@ -32,5 +32,12 @@ export class AdminTopicsController {
   @Policy('content.manage')
   reorderTopics(@Body() dto: TopicReorderDto) {
     return this.topicsService.reorderTopics(dto);
+  }
+
+  @Delete(':topicId')
+  @RequireUserType('ADMIN')
+  @Policy('content.manage')
+  deleteTopic(@Param('topicId') topicId: string) {
+    return this.topicsService.deleteTopic(topicId);
   }
 }

@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Audit, CurrentUser } from '../../common/decorators';
 import { JwtAuthGuard } from '../auth/guards';
@@ -35,5 +45,13 @@ export class AdminBannersController {
   @Audit('cms.banner.update', 'Banner')
   updateBanner(@Param('bannerId') bannerId: string, @Body() dto: BannerUpdateDto) {
     return this.cmsService.updateBanner(bannerId, dto);
+  }
+
+  @Delete(':bannerId')
+  @RequireUserType('ADMIN')
+  @Policy('admin.config.write')
+  @Audit('cms.banner.delete', 'Banner')
+  deleteBanner(@Param('bannerId') bannerId: string) {
+    return this.cmsService.deleteBanner(bannerId);
   }
 }

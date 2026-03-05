@@ -1,4 +1,13 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/decorators';
 import { JwtAuthGuard } from '../auth/guards';
@@ -54,5 +63,12 @@ export class PrintEngineController {
   @Policy('content.manage')
   cancel(@Param('jobId') jobId: string) {
     return this.printEngineService.cancelJob(jobId);
+  }
+
+  @Delete(':jobId')
+  @RequireUserType('ADMIN')
+  @Policy('content.manage')
+  deleteJob(@Param('jobId') jobId: string) {
+    return this.printEngineService.deleteJob(jobId);
   }
 }

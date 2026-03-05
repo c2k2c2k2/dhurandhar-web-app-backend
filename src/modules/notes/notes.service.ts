@@ -124,6 +124,33 @@ export class NotesService {
     });
   }
 
+  async deleteNote(noteId: string) {
+    const note = await this.prisma.note.findUnique({
+      where: { id: noteId },
+      select: { id: true },
+    });
+    if (!note) {
+      throw new NotFoundException({
+        code: 'NOTE_NOT_FOUND',
+        message: 'Note not found.',
+      });
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.assetReference.deleteMany({
+        where: {
+          resourceType: AssetResourceType.NOTE,
+          resourceId: noteId,
+        },
+      }),
+      this.prisma.note.delete({
+        where: { id: noteId },
+      }),
+    ]);
+
+    return { success: true };
+  }
+
   async listAdminNotes(query: NoteQueryDto) {
     const where = {
       subjectId: query.subjectId ?? undefined,

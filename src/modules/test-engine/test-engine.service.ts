@@ -146,6 +146,36 @@ export class TestEngineService {
     });
   }
 
+  async deleteTest(testId: string) {
+    const test = await this.prisma.test.findUnique({
+      where: { id: testId },
+      select: { id: true },
+    });
+    if (!test) {
+      throw new NotFoundException({
+        code: 'TEST_NOT_FOUND',
+        message: 'Test not found.',
+      });
+    }
+
+    const attemptsCount = await this.prisma.attempt.count({
+      where: { testId },
+    });
+    if (attemptsCount > 0) {
+      throw new BadRequestException({
+        code: 'TEST_DELETE_HAS_ATTEMPTS',
+        message:
+          'Cannot delete a test that already has student attempts. Unpublish it instead.',
+      });
+    }
+
+    await this.prisma.test.delete({
+      where: { id: testId },
+    });
+
+    return { success: true };
+  }
+
   async listAdminTests(query: TestQueryDto) {
     const page = Number(query.page ?? 1);
     const pageSize = Number(query.pageSize ?? 20);

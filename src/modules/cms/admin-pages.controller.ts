@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Audit, CurrentUser } from '../../common/decorators';
 import { JwtAuthGuard } from '../auth/guards';
@@ -51,5 +61,13 @@ export class AdminPagesController {
   @Audit('cms.page.unpublish', 'Page')
   unpublishPage(@Param('pageId') pageId: string) {
     return this.cmsService.unpublishPage(pageId);
+  }
+
+  @Delete(':pageId')
+  @RequireUserType('ADMIN')
+  @Policy('admin.config.write')
+  @Audit('cms.page.delete', 'Page')
+  deletePage(@Param('pageId') pageId: string) {
+    return this.cmsService.deletePage(pageId);
   }
 }

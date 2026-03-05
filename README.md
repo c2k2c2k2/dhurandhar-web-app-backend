@@ -58,6 +58,9 @@ If you deploy on Coolify/Nixpacks, make sure this command runs during build (or 
 Print queue durability knobs:
 - `PRINT_REQUEUE_ON_BOOT_LIMIT` re-enqueues orphaned DB `QUEUED` print jobs on startup.
 - `PRINT_AUTO_INSTALL_PLAYWRIGHT_CHROMIUM` auto-installs browser binaries if missing.
+- `PRINT_FORCE_INLINE_PROCESSING=true` bypasses BullMQ and processes jobs in the same API process (useful in local/dev when shared Redis has stale workers).
+- `PRINT_PAPER_BRAND_NAME` and `PRINT_PAPER_BRAND_META` control first-page header branding in generated papers.
+- `PRINT_FONTS_DIR` can point to a directory containing print fonts (`S0708892*`, `sulekha/DVBWSR3*.TTF`) if they are not available in the default workspace paths.
 
 ## Run tests
 

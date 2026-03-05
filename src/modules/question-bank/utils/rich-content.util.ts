@@ -1,4 +1,4 @@
-import katex from 'katex';
+import * as katex from 'katex';
 import * as sanitizeHtml from 'sanitize-html';
 
 const QUESTION_ALLOWED_TAGS = [
@@ -46,19 +46,31 @@ const ENTITY_MAP: Record<string, string> = {
   nbsp: ' ',
 };
 
+type KatexRenderToString = (
+  expression: string,
+  options: {
+    displayMode: boolean;
+    throwOnError: boolean;
+    strict: 'ignore';
+  },
+) => string;
+
 function decodeHtmlEntities(value: string): string {
   if (!value) return '';
-  return value.replace(/&(#\d+|#x[0-9a-fA-F]+|[a-zA-Z]+);/g, (match, token: string) => {
-    if (token.startsWith('#x')) {
-      const code = Number.parseInt(token.slice(2), 16);
-      return Number.isNaN(code) ? match : String.fromCodePoint(code);
-    }
-    if (token.startsWith('#')) {
-      const code = Number.parseInt(token.slice(1), 10);
-      return Number.isNaN(code) ? match : String.fromCodePoint(code);
-    }
-    return ENTITY_MAP[token] ?? match;
-  });
+  return value.replace(
+    /&(#\d+|#x[0-9a-fA-F]+|[a-zA-Z]+);/g,
+    (match, token: string) => {
+      if (token.startsWith('#x')) {
+        const code = Number.parseInt(token.slice(2), 16);
+        return Number.isNaN(code) ? match : String.fromCodePoint(code);
+      }
+      if (token.startsWith('#')) {
+        const code = Number.parseInt(token.slice(1), 10);
+        return Number.isNaN(code) ? match : String.fromCodePoint(code);
+      }
+      return ENTITY_MAP[token] ?? match;
+    },
+  );
 }
 
 function normalizeStoredLatex(raw: string): string {
@@ -163,7 +175,8 @@ export function extractQuestionSearchFragments(value: unknown): string[] {
     }
 
     if (typeof input === 'string') {
-      const text = parentKey === 'html' ? extractTextFromQuestionHtml(input) : input;
+      const text =
+        parentKey === 'html' ? extractTextFromQuestionHtml(input) : input;
       const normalized = text.replace(/\s+/g, ' ').trim();
       if (normalized) {
         fragments.push(normalized);
@@ -182,9 +195,11 @@ export function extractQuestionSearchFragments(value: unknown): string[] {
     }
 
     if (typeof input === 'object') {
-      Object.entries(input as Record<string, unknown>).forEach(([key, entry]) => {
-        walk(entry, key);
-      });
+      Object.entries(input as Record<string, unknown>).forEach(
+        ([key, entry]) => {
+          walk(entry, key);
+        },
+      );
     }
   };
 
@@ -194,7 +209,24 @@ export function extractQuestionSearchFragments(value: unknown): string[] {
 
 function renderMathExpression(latexRaw: string, displayMode: boolean): string {
   const latex = normalizeStoredLatex(latexRaw);
-  return katex.renderToString(latex, {
+
+  const katexCandidate = katex as unknown as {
+    renderToString?: KatexRenderToString;
+    default?: { renderToString?: KatexRenderToString };
+  };
+  const renderToStringFn =
+    katexCandidate.renderToString ?? katexCandidate.default?.renderToString;
+
+  if (typeof renderToStringFn !== 'function') {
+    // Graceful fallback so print jobs never fail on module-shape mismatch.
+    return sanitizeHtml(latex, {
+      allowedTags: [],
+      allowedAttributes: {},
+      disallowedTagsMode: 'discard',
+    });
+  }
+
+  return renderToStringFn(latex, {
     displayMode,
     throwOnError: false,
     strict: 'ignore',
@@ -207,10 +239,12 @@ export function renderQuestionHtmlWithMath(value: string): string {
   return sanitized
     .replace(
       /<span[^>]*\sdata-question-math-inline=(["'])(.*?)\1[^>]*>[\s\S]*?<\/span>/gi,
-      (_match, _quote, latex: string) => `<span class="question-math-inline">${renderMathExpression(latex, false)}</span>`,
+      (_match, _quote, latex: string) =>
+        `<span class="question-math-inline">${renderMathExpression(latex, false)}</span>`,
     )
     .replace(
       /<div[^>]*\sdata-question-math-block=(["'])(.*?)\1[^>]*>[\s\S]*?<\/div>/gi,
-      (_match, _quote, latex: string) => `<div class="question-math-block">${renderMathExpression(latex, true)}</div>`,
+      (_match, _quote, latex: string) =>
+        `<div class="question-math-block">${renderMathExpression(latex, true)}</div>`,
     );
 }

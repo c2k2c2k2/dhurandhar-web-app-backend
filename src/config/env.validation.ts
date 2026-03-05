@@ -147,6 +147,10 @@ export const envValidationSchema = Joi.object({
   PRINT_MAX_QUESTIONS: Joi.number().integer().default(200),
   PRINT_MAX_EMBEDDED_IMAGE_BYTES: Joi.number().integer().default(20971520),
   PRINT_FAKE_PDF: Joi.boolean().truthy('true').falsy('false').default(false),
+  PRINT_FORCE_INLINE_PROCESSING: Joi.boolean()
+    .truthy('true')
+    .falsy('false')
+    .default(false),
   PRINT_REQUEUE_ON_BOOT_LIMIT: Joi.number().integer().min(0).default(100),
   PRINT_AUTO_INSTALL_PLAYWRIGHT_CHROMIUM: Joi.boolean()
     .truthy('true')

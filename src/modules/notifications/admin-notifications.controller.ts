@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Audit } from '../../common/decorators';
 import { JwtAuthGuard } from '../auth/guards';
@@ -43,6 +53,14 @@ export class AdminNotificationsController {
     @Body() dto: NotificationTemplateUpdateDto,
   ) {
     return this.notificationsService.updateTemplate(templateId, dto);
+  }
+
+  @Delete('templates/:templateId')
+  @RequireUserType('ADMIN')
+  @Policy('notifications.manage')
+  @Audit('notifications.template.delete', 'NotificationTemplate')
+  deleteTemplate(@Param('templateId') templateId: string) {
+    return this.notificationsService.deleteTemplate(templateId);
   }
 
   @Get('messages')
