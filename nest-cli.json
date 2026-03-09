@@ -7,6 +7,9 @@
     "assets": [
       {
         "include": "modules/print-engine/templates/*.html"
+      },
+      {
+        "include": "modules/print-engine/fonts/**/*"
       }
     ]
   }

@@ -1387,7 +1387,8 @@ export class PrintEngineService implements OnModuleInit {
   }
 
   private renderRichHtml(value: string) {
-    return renderQuestionHtmlWithMath(value);
+    const rendered = renderQuestionHtmlWithMath(value);
+    return this.applyLegacyFontHintToRichHtml(rendered);
   }
 
   private renderLegacyMathFromText(value: string) {
@@ -1402,6 +1403,30 @@ export class PrintEngineService implements OnModuleInit {
       ? this.decodeHtmlEntities(value)
       : value;
     return this.renderRichHtml(source);
+  }
+
+  private applyLegacyFontHintToRichHtml(value: string) {
+    const normalized = value.trim();
+    if (!normalized) {
+      return '';
+    }
+
+    if (this.hasLegacyFontHint(normalized)) {
+      return normalized;
+    }
+
+    const plainText = this.extractPlainTextForPrint(normalized);
+    if (!this.looksLikeSurekhEncodedText(plainText)) {
+      return normalized;
+    }
+
+    return `<div class="font-marathi-encoded font-marathi-surekh font-marathi-sulekha" data-question-font="surekh">${normalized}</div>`;
+  }
+
+  private hasLegacyFontHint(value: string) {
+    return /(?:data-question-font\s*=\s*["'](?:surekh|sulekha|shree-dev)["'])|(?:font-marathi-(?:encoded|legacy-marathi|surekh|sulekha|shree-dev))/i.test(
+      value,
+    );
   }
 
   private decodeHtmlEntities(value: string) {
