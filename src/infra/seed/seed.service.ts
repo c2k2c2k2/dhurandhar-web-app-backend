@@ -507,16 +507,184 @@ export class SeedService implements OnModuleInit {
       adminId,
     );
 
+    const seededSiteSettingsConfig =
+      await this.ensurePublishedSiteSettingsConfig(adminId);
+
     if (
       plansCreated > 0 ||
       couponsCreated > 0 ||
       seededLanguageConfig ||
-      seededPresetConfig
+      seededPresetConfig ||
+      seededSiteSettingsConfig
     ) {
       this.logger.log(
-        `Seeded default catalog (plans=${plansCreated}, coupons=${couponsCreated}, app.languages=${seededLanguageConfig ? 'created' : 'kept'}, test.presets=${seededPresetConfig ? 'created' : 'kept'}).`,
+        `Seeded default catalog (plans=${plansCreated}, coupons=${couponsCreated}, app.languages=${seededLanguageConfig ? 'created' : 'kept'}, test.presets=${seededPresetConfig ? 'created' : 'kept'}, app.site_settings=${seededSiteSettingsConfig ? 'created' : 'kept'}).`,
       );
     }
+  }
+
+  private buildSiteSettingsSeedConfig(): Record<string, unknown> {
+    const bool = (key: string, fallback: boolean) => {
+      const value = this.configService.get<string | boolean>(key);
+      if (value === undefined || value === null || value === '') {
+        return fallback;
+      }
+      return this.parseBoolean(value);
+    };
+
+    const num = (key: string, fallback: number, min?: number) => {
+      const parsed = Number(this.configService.get<number | string>(key) ?? fallback);
+      if (!Number.isFinite(parsed)) {
+        return fallback;
+      }
+      if (typeof min === 'number' && parsed < min) {
+        return fallback;
+      }
+      return parsed;
+    };
+
+    const str = (key: string, fallback = '') => {
+      const value = this.configService.get<string>(key);
+      if (value === undefined || value === null) {
+        return fallback;
+      }
+      return String(value);
+    };
+
+    return {
+      STUDENT_SINGLE_SESSION_ENFORCEMENT: bool(
+        'STUDENT_SINGLE_SESSION_ENFORCEMENT',
+        true,
+      ),
+      STUDENT_SINGLE_SESSION_STRATEGY: str(
+        'STUDENT_SINGLE_SESSION_STRATEGY',
+        'FORCE_LOGOUT_EXISTING',
+      ),
+      NOTE_VIEW_SESSION_TTL_MINUTES: num('NOTE_VIEW_SESSION_TTL_MINUTES', 30, 1),
+      NOTE_VIEW_MAX_SESSIONS: num('NOTE_VIEW_MAX_SESSIONS', 2, 1),
+      NOTE_ACCESS_RATE_LIMIT: num('NOTE_ACCESS_RATE_LIMIT', 60, 1),
+      NOTE_ACCESS_RATE_WINDOW_SECONDS: num(
+        'NOTE_ACCESS_RATE_WINDOW_SECONDS',
+        120,
+        1,
+      ),
+      THROTTLE_TTL_SECONDS: num('THROTTLE_TTL_SECONDS', 60, 1),
+      THROTTLE_LIMIT: num('THROTTLE_LIMIT', 120, 1),
+      AUTH_THROTTLE_LIMIT: num('AUTH_THROTTLE_LIMIT', 10, 1),
+      PAYMENTS_THROTTLE_LIMIT: num('PAYMENTS_THROTTLE_LIMIT', 5, 1),
+      SEARCH_THROTTLE_LIMIT: num('SEARCH_THROTTLE_LIMIT', 60, 1),
+      PHONEPE_PAYMENT_MESSAGE: str('PHONEPE_PAYMENT_MESSAGE', ''),
+      PHONEPE_DISABLE_PAYMENT_RETRY: bool(
+        'PHONEPE_DISABLE_PAYMENT_RETRY',
+        false,
+      ),
+      PHONEPE_PUBLISH_EVENTS: bool('PHONEPE_PUBLISH_EVENTS', false),
+      SUBSCRIPTION_STACKING: bool('SUBSCRIPTION_STACKING', true),
+      SUBSCRIPTION_RENEWAL_WINDOW_DAYS: num(
+        'SUBSCRIPTION_RENEWAL_WINDOW_DAYS',
+        7,
+        0,
+      ),
+      SUBSCRIPTION_LIFETIME_DAYS: num('SUBSCRIPTION_LIFETIME_DAYS', 36500, 365),
+      PENDING_ORDER_EXPIRE_MINUTES: num('PENDING_ORDER_EXPIRE_MINUTES', 30, 1),
+      PAYMENTS_RECONCILE_INTERVAL_SECONDS: num(
+        'PAYMENTS_RECONCILE_INTERVAL_SECONDS',
+        60,
+        10,
+      ),
+      PAYMENTS_AUTOPAY_INTERVAL_SECONDS: num(
+        'PAYMENTS_AUTOPAY_INTERVAL_SECONDS',
+        300,
+        10,
+      ),
+      PAYMENTS_AUTOPAY_RETRY_MINUTES: num(
+        'PAYMENTS_AUTOPAY_RETRY_MINUTES',
+        60,
+        1,
+      ),
+      PAYMENTS_AUTOPAY_REMINDER_HOURS: num(
+        'PAYMENTS_AUTOPAY_REMINDER_HOURS',
+        24,
+        1,
+      ),
+      CMS_PUBLIC_KEYS: str('CMS_PUBLIC_KEYS', 'landing'),
+      CMS_STUDENT_KEYS: str('CMS_STUDENT_KEYS', 'home,student,app.languages'),
+      PRINT_MAX_QUESTIONS: num('PRINT_MAX_QUESTIONS', 200, 1),
+      PRINT_MAX_EMBEDDED_IMAGE_BYTES: num(
+        'PRINT_MAX_EMBEDDED_IMAGE_BYTES',
+        20971520,
+        1024,
+      ),
+      PRINT_FAKE_PDF: bool('PRINT_FAKE_PDF', false),
+      PRINT_FORCE_INLINE_PROCESSING: bool('PRINT_FORCE_INLINE_PROCESSING', false),
+      PRINT_REQUEUE_ON_BOOT_LIMIT: num('PRINT_REQUEUE_ON_BOOT_LIMIT', 100, 0),
+      PRINT_AUTO_INSTALL_PLAYWRIGHT_CHROMIUM: bool(
+        'PRINT_AUTO_INSTALL_PLAYWRIGHT_CHROMIUM',
+        true,
+      ),
+      PRINT_PAPER_BRAND_NAME: str('PRINT_PAPER_BRAND_NAME', 'Career Point Academy'),
+      PRINT_PAPER_BRAND_META: str('PRINT_PAPER_BRAND_META', ''),
+      PRINT_FONTS_DIR: str('PRINT_FONTS_DIR', ''),
+    };
+  }
+
+  private async ensurePublishedSiteSettingsConfig(createdByUserId?: string) {
+    const key = 'app.site_settings';
+    const defaults = this.buildSiteSettingsSeedConfig();
+
+    const published = await this.prisma.appConfig.findFirst({
+      where: { key, status: CmsConfigStatus.PUBLISHED },
+      orderBy: { version: 'desc' },
+      select: { id: true, version: true, configJson: true },
+    });
+
+    if (!published) {
+      return this.ensurePublishedAppConfig(key, defaults, createdByUserId);
+    }
+
+    const current =
+      published.configJson &&
+      typeof published.configJson === 'object' &&
+      !Array.isArray(published.configJson)
+        ? (published.configJson as Record<string, unknown>)
+        : {};
+
+    const missingKeys = Object.keys(defaults).filter((entry) => !(entry in current));
+    if (missingKeys.length === 0) {
+      return false;
+    }
+
+    const merged: Record<string, unknown> = {
+      ...defaults,
+      ...current,
+    };
+
+    await this.prisma.$transaction([
+      this.prisma.appConfig.updateMany({
+        where: {
+          key,
+          status: CmsConfigStatus.PUBLISHED,
+          id: { not: published.id },
+        },
+        data: { status: CmsConfigStatus.ARCHIVED },
+      }),
+      this.prisma.appConfig.create({
+        data: {
+          key,
+          version: published.version + 1,
+          status: CmsConfigStatus.PUBLISHED,
+          publishedAt: new Date(),
+          createdByUserId,
+          configJson: merged as Prisma.InputJsonValue,
+        },
+      }),
+    ]);
+
+    this.logger.log(
+      `Backfilled app.site_settings with missing keys: ${missingKeys.join(', ')}.`,
+    );
+
+    return true;
   }
 
   private getDefaultPlanSeeds(
