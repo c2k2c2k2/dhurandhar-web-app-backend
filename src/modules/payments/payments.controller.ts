@@ -13,8 +13,16 @@ import { seconds, Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { Public, CurrentUser } from '../../common/decorators';
 import { JwtAuthGuard } from '../auth/guards';
+import { SiteSettingsService } from '../site-settings/site-settings.service';
 import { CheckoutDto, CheckoutPreviewDto } from './dto';
 import { PaymentsService } from './payments.service';
+
+const PAYMENTS_THROTTLE_TTL_SECONDS = 60;
+const checkoutThrottleLimit = () =>
+  SiteSettingsService.getCachedNumber('PAYMENTS_THROTTLE_LIMIT', 5, {
+    integer: true,
+    min: 1,
+  });
 
 @ApiTags('payments')
 @Controller('payments')
@@ -32,7 +40,12 @@ export class PaymentsController {
   }
 
   @Post('checkout')
-  @Throttle({ default: { limit: 5, ttl: seconds(60) } })
+  @Throttle({
+    default: {
+      limit: checkoutThrottleLimit,
+      ttl: seconds(PAYMENTS_THROTTLE_TTL_SECONDS),
+    },
+  })
   @UseGuards(JwtAuthGuard)
   checkout(
     @CurrentUser() user: { userId: string },

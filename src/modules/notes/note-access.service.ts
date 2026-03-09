@@ -10,6 +10,7 @@ import { NoteSecuritySignalType, Prisma } from '@prisma/client';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { MinioService } from '../files/minio.service';
 import { EntitlementService } from '../payments/entitlement.service';
+import { SiteSettingsService } from '../site-settings/site-settings.service';
 
 @Injectable()
 export class NoteAccessService {
@@ -18,6 +19,7 @@ export class NoteAccessService {
     private readonly configService: ConfigService,
     private readonly minioService: MinioService,
     private readonly entitlementService: EntitlementService,
+    private readonly siteSettings: SiteSettingsService,
   ) {}
 
   async createViewSession(noteId: string, userId: string, meta: { ip?: string; userAgent?: string }) {
@@ -49,7 +51,10 @@ export class NoteAccessService {
       }
     }
 
-    const maxSessions = Number(this.configService.get('NOTE_VIEW_MAX_SESSIONS') ?? 2);
+    const maxSessions = this.siteSettings.getNumber('NOTE_VIEW_MAX_SESSIONS', 2, {
+      integer: true,
+      min: 1,
+    });
     const activeCount = await this.prisma.noteViewSession.count({
       where: {
         noteId,
@@ -66,7 +71,14 @@ export class NoteAccessService {
       });
     }
 
-    const ttlMinutes = Number(this.configService.get('NOTE_VIEW_SESSION_TTL_MINUTES') ?? 30);
+    const ttlMinutes = this.siteSettings.getNumber(
+      'NOTE_VIEW_SESSION_TTL_MINUTES',
+      30,
+      {
+        integer: true,
+        min: 1,
+      },
+    );
     const expiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000);
     const viewToken = randomBytes(32).toString('hex');
     const tokenHash = this.hash(viewToken);
@@ -232,8 +244,18 @@ export class NoteAccessService {
   }
 
   private async checkRateLimit(noteId: string, userId: string) {
-    const limit = Number(this.configService.get('NOTE_ACCESS_RATE_LIMIT') ?? 60);
-    const windowSeconds = Number(this.configService.get('NOTE_ACCESS_RATE_WINDOW_SECONDS') ?? 120);
+    const limit = this.siteSettings.getNumber('NOTE_ACCESS_RATE_LIMIT', 60, {
+      integer: true,
+      min: 1,
+    });
+    const windowSeconds = this.siteSettings.getNumber(
+      'NOTE_ACCESS_RATE_WINDOW_SECONDS',
+      120,
+      {
+        integer: true,
+        min: 1,
+      },
+    );
     const since = new Date(Date.now() - windowSeconds * 1000);
 
     const count = await this.prisma.noteAccessLog.count({

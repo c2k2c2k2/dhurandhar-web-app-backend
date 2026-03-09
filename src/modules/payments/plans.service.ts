@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { Prisma, SubscriptionStatus } from '@prisma/client';
 import { PrismaService } from '../../infra/prisma/prisma.service';
+import { SiteSettingsService } from '../site-settings/site-settings.service';
 import {
   PlanCreateDto,
   PlanDurationUnit,
@@ -32,7 +32,7 @@ const DEFAULT_LIFETIME_DAYS = 36500;
 export class PlansService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly configService: ConfigService,
+    private readonly siteSettings: SiteSettingsService,
   ) {}
 
   async listPublicPlans() {
@@ -568,9 +568,13 @@ export class PlansService {
   }
 
   private resolveRenewalWindowDays() {
-    const value = Number(
-      this.configService.get<number>('SUBSCRIPTION_RENEWAL_WINDOW_DAYS') ??
-        DEFAULT_RENEWAL_WINDOW_DAYS,
+    const value = this.siteSettings.getNumber(
+      'SUBSCRIPTION_RENEWAL_WINDOW_DAYS',
+      DEFAULT_RENEWAL_WINDOW_DAYS,
+      {
+        integer: true,
+        min: 0,
+      },
     );
     if (!Number.isFinite(value) || value < 0) {
       return DEFAULT_RENEWAL_WINDOW_DAYS;
@@ -579,9 +583,13 @@ export class PlansService {
   }
 
   private resolveLifetimeDays() {
-    const value = Number(
-      this.configService.get<number>('SUBSCRIPTION_LIFETIME_DAYS') ??
-        DEFAULT_LIFETIME_DAYS,
+    const value = this.siteSettings.getNumber(
+      'SUBSCRIPTION_LIFETIME_DAYS',
+      DEFAULT_LIFETIME_DAYS,
+      {
+        integer: true,
+        min: 365,
+      },
     );
     if (!Number.isFinite(value) || value <= 0) {
       return DEFAULT_LIFETIME_DAYS;

@@ -25,6 +25,7 @@ import {
 import { PhonepeService } from './phonepe/phonepe.service';
 import { SubscriptionsService } from './subscriptions.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { SiteSettingsService } from '../site-settings/site-settings.service';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RENEWAL_WINDOW_DAYS = 7;
@@ -47,6 +48,7 @@ export class PaymentsService {
     private readonly subscriptionsService: SubscriptionsService,
     private readonly configService: ConfigService,
     private readonly notificationsService: NotificationsService,
+    private readonly siteSettings: SiteSettingsService,
   ) {}
 
   async previewCheckout(userId: string | undefined, dto: CheckoutPreviewDto) {
@@ -133,8 +135,14 @@ export class PaymentsService {
       ? PaymentOrderFlow.AUTOPAY_SETUP
       : PaymentOrderFlow.ONE_TIME;
 
-    const expiresMinutes =
-      this.configService.get<number>('PENDING_ORDER_EXPIRE_MINUTES') ?? 30;
+    const expiresMinutes = this.siteSettings.getNumber(
+      'PENDING_ORDER_EXPIRE_MINUTES',
+      30,
+      {
+        integer: true,
+        min: 1,
+      },
+    );
     const expiresAt = new Date(now.getTime() + expiresMinutes * 60 * 1000);
 
     if (idempotencyKey) {
@@ -301,12 +309,14 @@ export class PaymentsService {
         },
       });
     } else {
-      const paymentMessage = this.configService.get<string>(
+      const paymentMessage = this.siteSettings.getString(
         'PHONEPE_PAYMENT_MESSAGE',
+        '',
       );
-      const disablePaymentRetry =
-        this.configService.get<boolean>('PHONEPE_DISABLE_PAYMENT_RETRY') ??
-        false;
+      const disablePaymentRetry = this.siteSettings.getBoolean(
+        'PHONEPE_DISABLE_PAYMENT_RETRY',
+        false,
+      );
 
       const payload = {
         merchantOrderId: order.merchantTransactionId,
@@ -749,8 +759,13 @@ export class PaymentsService {
   }
 
   async sendAutoPayRenewalReminders(limit = 40) {
-    const reminderHours = Number(
-      this.configService.get<number>('PAYMENTS_AUTOPAY_REMINDER_HOURS') ?? 24,
+    const reminderHours = this.siteSettings.getNumber(
+      'PAYMENTS_AUTOPAY_REMINDER_HOURS',
+      24,
+      {
+        integer: true,
+        min: 1,
+      },
     );
     const safeReminderHours =
       Number.isFinite(reminderHours) && reminderHours > 0 ? reminderHours : 24;
@@ -844,13 +859,23 @@ export class PaymentsService {
       return false;
     }
 
-    const expiresMinutes =
-      this.configService.get<number>('PENDING_ORDER_EXPIRE_MINUTES') ?? 30;
+    const expiresMinutes = this.siteSettings.getNumber(
+      'PENDING_ORDER_EXPIRE_MINUTES',
+      30,
+      {
+        integer: true,
+        min: 1,
+      },
+    );
     const expiresAt = new Date(now.getTime() + expiresMinutes * 60 * 1000);
     const scheduledFor = mandate.nextChargeAt ?? now;
-    const retryMinutes = Number(
-      this.configService.get<number>('PAYMENTS_AUTOPAY_RETRY_MINUTES') ??
-        DEFAULT_AUTOPAY_RETRY_MINUTES,
+    const retryMinutes = this.siteSettings.getNumber(
+      'PAYMENTS_AUTOPAY_RETRY_MINUTES',
+      DEFAULT_AUTOPAY_RETRY_MINUTES,
+      {
+        integer: true,
+        min: 1,
+      },
     );
     const safeRetryMinutes =
       Number.isFinite(retryMinutes) && retryMinutes > 0
@@ -890,8 +915,9 @@ export class PaymentsService {
 
     const merchantSubscriptionId = mandate.merchantSubscriptionId;
     const notifyBeforeExecute =
-      this.configService.get<boolean>('PHONEPE_SUBSCRIPTION_NOTIFY_BEFORE_EXECUTE') ??
-      true;
+      this.configService.get<boolean>(
+        'PHONEPE_SUBSCRIPTION_NOTIFY_BEFORE_EXECUTE',
+      ) ?? true;
     if (notifyBeforeExecute) {
       try {
         const notifyResponse = await this.phonepeService.notifySubscriptionRedemption(
@@ -1418,9 +1444,13 @@ export class PaymentsService {
     plan?: { name: string } | null;
   }) {
     const now = new Date();
-    const retryMinutes = Number(
-      this.configService.get<number>('PAYMENTS_AUTOPAY_RETRY_MINUTES') ??
-        DEFAULT_AUTOPAY_RETRY_MINUTES,
+    const retryMinutes = this.siteSettings.getNumber(
+      'PAYMENTS_AUTOPAY_RETRY_MINUTES',
+      DEFAULT_AUTOPAY_RETRY_MINUTES,
+      {
+        integer: true,
+        min: 1,
+      },
     );
     const safeRetryMinutes =
       Number.isFinite(retryMinutes) && retryMinutes > 0
@@ -1895,8 +1925,13 @@ export class PaymentsService {
     requested: boolean,
   ) {
     const validity = this.extractPlanValidity(plan);
-    const lifetimeDays = Number(
-      this.configService.get<number>('SUBSCRIPTION_LIFETIME_DAYS') ?? 36500,
+    const lifetimeDays = this.siteSettings.getNumber(
+      'SUBSCRIPTION_LIFETIME_DAYS',
+      36500,
+      {
+        integer: true,
+        min: 365,
+      },
     );
     const safeLifetimeDays =
       Number.isFinite(lifetimeDays) && lifetimeDays > 0 ? lifetimeDays : 36500;
@@ -2113,9 +2148,13 @@ export class PaymentsService {
       });
     }
 
-    const renewalWindowDays = Number(
-      this.configService.get<number>('SUBSCRIPTION_RENEWAL_WINDOW_DAYS') ??
-        DEFAULT_RENEWAL_WINDOW_DAYS,
+    const renewalWindowDays = this.siteSettings.getNumber(
+      'SUBSCRIPTION_RENEWAL_WINDOW_DAYS',
+      DEFAULT_RENEWAL_WINDOW_DAYS,
+      {
+        integer: true,
+        min: 0,
+      },
     );
     const safeRenewalWindowDays =
       Number.isFinite(renewalWindowDays) && renewalWindowDays >= 0

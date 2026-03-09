@@ -25,6 +25,8 @@ import { PracticeModule } from './modules/practice/practice.module';
 import { PrintEngineModule } from './modules/print-engine/print-engine.module';
 import { QuestionBankModule } from './modules/question-bank/question-bank.module';
 import { SearchModule } from './modules/search/search.module';
+import { SiteSettingsModule } from './modules/site-settings/site-settings.module';
+import { SiteSettingsService } from './modules/site-settings/site-settings.service';
 import { StudentEventsModule } from './modules/student-events/student-events.module';
 import { TestEngineModule } from './modules/test-engine/test-engine.module';
 import { UsersModule } from './modules/users/users.module';
@@ -96,17 +98,31 @@ import { UsersModule } from './modules/users/users.module';
     ThrottlerModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => {
-        const ttlSeconds =
+        const fallbackTtlSeconds =
           configService.get<number>('THROTTLE_TTL_SECONDS') ?? 60;
-        const limit = configService.get<number>('THROTTLE_LIMIT') ?? 120;
+        const fallbackLimit =
+          configService.get<number>('THROTTLE_LIMIT') ?? 120;
         return [
           {
-            ttl: seconds(ttlSeconds),
-            limit,
+            ttl: () =>
+              seconds(
+                SiteSettingsService.getCachedNumber(
+                  'THROTTLE_TTL_SECONDS',
+                  fallbackTtlSeconds,
+                  { integer: true, min: 1 },
+                ),
+              ),
+            limit: () =>
+              SiteSettingsService.getCachedNumber(
+                'THROTTLE_LIMIT',
+                fallbackLimit,
+                { integer: true, min: 1 },
+              ),
           },
         ];
       },
     }),
+    SiteSettingsModule,
     PrismaModule,
     SeedModule,
     AuthModule,

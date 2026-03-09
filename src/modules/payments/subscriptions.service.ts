@@ -1,8 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { Cron } from '@nestjs/schedule';
 import { EntitlementKind, Prisma, SubscriptionStatus } from '@prisma/client';
 import { PrismaService } from '../../infra/prisma/prisma.service';
+import { SiteSettingsService } from '../site-settings/site-settings.service';
 
 type EntitlementConfig = {
   kind: EntitlementKind;
@@ -18,7 +18,7 @@ export class SubscriptionsService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly configService: ConfigService,
+    private readonly siteSettings: SiteSettingsService,
   ) {}
 
   async activateSubscription(userId: string, planId: string, paymentOrderId?: string) {
@@ -28,8 +28,7 @@ export class SubscriptionsService {
     }
 
     const now = new Date();
-    const stacking =
-      this.configService.get<boolean>('SUBSCRIPTION_STACKING') ?? true;
+    const stacking = this.siteSettings.getBoolean('SUBSCRIPTION_STACKING', true);
 
     const activeSubs = await this.prisma.subscription.findMany({
       where: {
@@ -175,9 +174,13 @@ export class SubscriptionsService {
       }
     }
 
-    const lifetimeDays = Number(
-      this.configService.get<number>('SUBSCRIPTION_LIFETIME_DAYS') ??
-        DEFAULT_LIFETIME_DAYS,
+    const lifetimeDays = this.siteSettings.getNumber(
+      'SUBSCRIPTION_LIFETIME_DAYS',
+      DEFAULT_LIFETIME_DAYS,
+      {
+        integer: true,
+        min: 365,
+      },
     );
     const safeLifetimeDays =
       Number.isFinite(lifetimeDays) && lifetimeDays > 0

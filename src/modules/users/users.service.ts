@@ -3,7 +3,6 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import {
   PaymentOrderStatus,
   PaymentTransactionStatus,
@@ -23,6 +22,7 @@ import {
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { AuthorizationService } from '../authorization/authorization.service';
 import { SubscriptionsService } from '../payments/subscriptions.service';
+import { SiteSettingsService } from '../site-settings/site-settings.service';
 import {
   AdminActivateSubscriptionDto,
   AdminBlockUserDto,
@@ -43,9 +43,9 @@ const SUPER_ADMIN_ROLE_KEY = 'ADMIN_SUPER';
 export class UsersService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly configService: ConfigService,
     private readonly authorizationService: AuthorizationService,
     private readonly subscriptionsService: SubscriptionsService,
+    private readonly siteSettings: SiteSettingsService,
   ) {}
 
   async getMe(userId?: string) {
@@ -124,9 +124,13 @@ export class UsersService {
       });
     }
 
-    const renewalWindowDays = Number(
-      this.configService.get<number>('SUBSCRIPTION_RENEWAL_WINDOW_DAYS') ??
-        DEFAULT_RENEWAL_WINDOW_DAYS,
+    const renewalWindowDays = this.siteSettings.getNumber(
+      'SUBSCRIPTION_RENEWAL_WINDOW_DAYS',
+      DEFAULT_RENEWAL_WINDOW_DAYS,
+      {
+        integer: true,
+        min: 0,
+      },
     );
     const safeRenewalWindowDays =
       Number.isFinite(renewalWindowDays) && renewalWindowDays >= 0

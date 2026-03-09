@@ -3,7 +3,6 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import {
   AssetResourceType,
   CmsConfigStatus,
@@ -11,6 +10,7 @@ import {
   Prisma,
 } from '@prisma/client';
 import { PrismaService } from '../../infra/prisma/prisma.service';
+import { SiteSettingsService } from '../site-settings/site-settings.service';
 import {
   AppConfigCreateDto,
   AppConfigQueryDto,
@@ -30,7 +30,7 @@ import {
 export class CmsService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly configService: ConfigService,
+    private readonly siteSettings: SiteSettingsService,
   ) {}
 
   async listAppConfigs(query: AppConfigQueryDto) {
@@ -624,7 +624,7 @@ export class CmsService {
   }
 
   private resolveAllowedKeys(envKey: 'CMS_PUBLIC_KEYS' | 'CMS_STUDENT_KEYS', requested?: string[]) {
-    const raw = this.configService.get<string>(envKey);
+    const raw = this.siteSettings.getString(envKey, '').trim();
     if (!raw || raw.trim() === '*' || raw.trim() === '') {
       return requested && requested.length ? requested : undefined;
     }

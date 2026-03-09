@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { Interval } from '@nestjs/schedule';
+import { SiteSettingsService } from '../site-settings/site-settings.service';
 import { PaymentsService } from './payments.service';
 
 @Injectable()
@@ -10,13 +10,19 @@ export class PaymentsReconcileService {
 
   constructor(
     private readonly paymentsService: PaymentsService,
-    private readonly configService: ConfigService,
+    private readonly siteSettings: SiteSettingsService,
   ) {}
 
   @Interval(60000)
   async reconcileTick() {
-    const intervalSeconds =
-      this.configService.get<number>('PAYMENTS_RECONCILE_INTERVAL_SECONDS') ?? 60;
+    const intervalSeconds = this.siteSettings.getNumber(
+      'PAYMENTS_RECONCILE_INTERVAL_SECONDS',
+      60,
+      {
+        integer: true,
+        min: 10,
+      },
+    );
     if (intervalSeconds <= 0) {
       return;
     }

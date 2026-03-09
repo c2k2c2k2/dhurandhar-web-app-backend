@@ -16,6 +16,7 @@ import {
   normalizeIndianPhone,
 } from '../../common/utils/phone';
 import { PrismaService } from '../../infra/prisma/prisma.service';
+import { SiteSettingsService } from '../site-settings/site-settings.service';
 import {
   LoginDto,
   LogoutDto,
@@ -41,6 +42,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly authTokenService: AuthTokenService,
     private readonly notificationsService: NotificationsService,
+    private readonly siteSettings: SiteSettingsService,
   ) {}
 
   async register(dto: RegisterDto, meta?: { ip?: string; userAgent?: string }) {
@@ -652,17 +654,18 @@ export class AuthService {
   private shouldEnforceStudentSingleSession(userType: UserType) {
     return (
       userType === UserType.STUDENT &&
-      (this.configService.get<boolean>('STUDENT_SINGLE_SESSION_ENFORCEMENT') ??
-        true)
+      this.siteSettings.getBoolean('STUDENT_SINGLE_SESSION_ENFORCEMENT', true)
     );
   }
 
   private getStudentSingleSessionStrategy(): StudentSingleSessionStrategy {
-    return (
-      this.configService.get<StudentSingleSessionStrategy>(
-        'STUDENT_SINGLE_SESSION_STRATEGY',
-      ) ?? 'FORCE_LOGOUT_EXISTING'
+    const strategy = this.siteSettings.getString(
+      'STUDENT_SINGLE_SESSION_STRATEGY',
+      'FORCE_LOGOUT_EXISTING',
     );
+    return strategy === 'DENY_NEW_LOGIN'
+      ? 'DENY_NEW_LOGIN'
+      : 'FORCE_LOGOUT_EXISTING';
   }
 
   private throwSessionConflict() {

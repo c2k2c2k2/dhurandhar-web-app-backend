@@ -29,10 +29,12 @@ import {
   PhonepeSubscriptionStatusResponse,
   type PhonepeStatusResponse,
 } from './phonepe.types';
+import { SiteSettingsService } from '../../site-settings/site-settings.service';
 
 @Injectable()
 export class PhonepeService {
   private client: StandardCheckoutClient | null = null;
+  private clientCacheKey: string | null = null;
   private oAuthTokenCache:
     | {
         accessToken: string;
@@ -41,7 +43,10 @@ export class PhonepeService {
       }
     | undefined;
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly siteSettings: SiteSettingsService,
+  ) {}
 
   async initiatePayment(payload: PhonepeInitiatePaymentPayload) {
     try {
@@ -137,9 +142,9 @@ export class PhonepeService {
     payload: PhonepeSubscriptionSetupPayload,
   ): Promise<PhonepeSubscriptionSetupResponse> {
     try {
-      const setupMessage = this.configService
-        .get<string>('PHONEPE_PAYMENT_MESSAGE')
-        ?.trim();
+      const setupMessage = this.siteSettings
+        .getString('PHONEPE_PAYMENT_MESSAGE', '')
+        .trim();
       const subscriptionType =
         this.configService.get<string>('PHONEPE_SUBSCRIPTION_TYPE') ??
         'RECURRING';
@@ -392,19 +397,28 @@ export class PhonepeService {
   }
 
   private getClient() {
-    if (this.client) {
-      return this.client;
-    }
-
     const clientId = this.getRequired('PHONEPE_CLIENT_ID');
     const clientSecret = this.getRequired('PHONEPE_CLIENT_SECRET');
     const clientVersion =
       this.configService.get<number>('PHONEPE_CLIENT_VERSION') ?? 1;
     const envValue = this.configService.get<string>('PHONEPE_ENV') ?? 'SANDBOX';
-    const publishEvents =
-      this.configService.get<boolean>('PHONEPE_PUBLISH_EVENTS') ?? false;
+    const publishEvents = this.siteSettings.getBoolean(
+      'PHONEPE_PUBLISH_EVENTS',
+      this.configService.get<boolean>('PHONEPE_PUBLISH_EVENTS') ?? false,
+    );
     const env =
       envValue.toUpperCase() === 'PRODUCTION' ? Env.PRODUCTION : Env.SANDBOX;
+    const cacheKey = [
+      clientId,
+      clientSecret,
+      clientVersion.toString(),
+      env.toString(),
+      publishEvents ? '1' : '0',
+    ].join('|');
+
+    if (this.client && this.clientCacheKey === cacheKey) {
+      return this.client;
+    }
 
     this.client = StandardCheckoutClient.getInstance(
       clientId,
@@ -413,6 +427,7 @@ export class PhonepeService {
       env,
       publishEvents,
     );
+    this.clientCacheKey = cacheKey;
 
     return this.client;
   }

@@ -3,11 +3,11 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { UserType } from '@prisma/client';
 import { JwtService } from '@nestjs/jwt';
 import { Request } from 'express';
 import { PrismaService } from '../../infra/prisma/prisma.service';
+import { SiteSettingsService } from '../site-settings/site-settings.service';
 import { IAuthSessionService } from './interfaces';
 
 @Injectable()
@@ -15,7 +15,7 @@ export class AuthSessionService implements IAuthSessionService {
   constructor(
     private readonly jwtService: JwtService,
     private readonly prisma: PrismaService,
-    private readonly configService: ConfigService,
+    private readonly siteSettings: SiteSettingsService,
   ) {}
 
   async validateRequest(
@@ -91,9 +91,9 @@ export class AuthSessionService implements IAuthSessionService {
   }
 
   private isStudentSingleSessionEnabled() {
-    return (
-      this.configService.get<boolean>('STUDENT_SINGLE_SESSION_ENFORCEMENT') ??
-      true
+    return this.siteSettings.getBoolean(
+      'STUDENT_SINGLE_SESSION_ENFORCEMENT',
+      true,
     );
   }
 

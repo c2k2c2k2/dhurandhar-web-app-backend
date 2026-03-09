@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { Interval } from '@nestjs/schedule';
+import { SiteSettingsService } from '../site-settings/site-settings.service';
 import { PaymentsService } from './payments.service';
 
 @Injectable()
@@ -10,13 +10,18 @@ export class PaymentsAutopayService {
 
   constructor(
     private readonly paymentsService: PaymentsService,
-    private readonly configService: ConfigService,
+    private readonly siteSettings: SiteSettingsService,
   ) {}
 
   @Interval(60000)
   async autopayTick() {
-    const intervalSeconds = Number(
-      this.configService.get<number>('PAYMENTS_AUTOPAY_INTERVAL_SECONDS') ?? 300,
+    const intervalSeconds = this.siteSettings.getNumber(
+      'PAYMENTS_AUTOPAY_INTERVAL_SECONDS',
+      300,
+      {
+        integer: true,
+        min: 10,
+      },
     );
     if (!Number.isFinite(intervalSeconds) || intervalSeconds <= 0) {
       return;

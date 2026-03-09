@@ -8,6 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import {
   AssetResourceType,
+  CmsConfigStatus,
   FileAssetPurpose,
   PrintJobStatus,
   PrintJobType,
@@ -91,6 +92,18 @@ type PrintJobRuntime = {
     orderIndex: number;
     metaJson?: Prisma.JsonValue | null;
   }>;
+};
+
+type PrintRuntimeSettings = {
+  maxQuestions: number;
+  maxEmbeddedBytes: number;
+  useFakePdf: boolean;
+  forceInlineProcessing: boolean;
+  autoInstallPlaywrightChromium: boolean;
+  requeueOnBootLimit: number;
+  paperBrandName: string;
+  paperBrandMeta: string;
+  printFontsDir: string;
 };
 
 const execFileAsync = promisify(execFile);
@@ -409,19 +422,25 @@ const DEFAULT_ANSWER_TEMPLATE = `<!DOCTYPE html>
 @Injectable()
 export class PrintEngineService implements OnModuleInit {
   private static playwrightInstallPromise: Promise<void> | null = null;
+  private static readonly SITE_SETTINGS_KEY = 'app.site_settings';
+  private static readonly SITE_SETTINGS_CACHE_TTL_MS = 30_000;
   private readonly logger = new Logger(PrintEngineService.name);
-  private readonly maxQuestions: number;
-  private readonly maxEmbeddedBytes: number;
-  private readonly useFakePdf: boolean;
-  private readonly forceInlineProcessing: boolean;
-  private readonly autoInstallPlaywrightChromium: boolean;
-  private readonly requeueOnBootLimit: number;
+  private readonly defaultPrintSettings: PrintRuntimeSettings;
+  private maxQuestions: number;
+  private maxEmbeddedBytes: number;
+  private useFakePdf: boolean;
+  private forceInlineProcessing: boolean;
+  private autoInstallPlaywrightChromium: boolean;
+  private requeueOnBootLimit: number;
   private readonly paperTemplate: string;
   private readonly answerTemplate: string;
   private readonly katexStyles: string;
-  private readonly embeddedFontStyles: string;
-  private readonly paperBrandName: string;
-  private readonly paperBrandMeta: string;
+  private embeddedFontStyles: string;
+  private paperBrandName: string;
+  private paperBrandMeta: string;
+  private printFontsDir: string;
+  private siteSettingsLastLoadedAt = 0;
+  private siteSettingsLoadPromise: Promise<void> | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -429,33 +448,56 @@ export class PrintEngineService implements OnModuleInit {
     private readonly configService: ConfigService,
     @InjectQueue('print-jobs') private readonly printQueue: Queue,
   ) {
-    this.maxQuestions =
+    const maxQuestions =
       this.configService.get<number>('PRINT_MAX_QUESTIONS') ?? 200;
-    this.maxEmbeddedBytes =
+    const maxEmbeddedBytes =
       this.configService.get<number>('PRINT_MAX_EMBEDDED_IMAGE_BYTES') ??
       20971520;
     const fakeEnv = this.configService.get<boolean | string>('PRINT_FAKE_PDF');
-    this.useFakePdf =
+    const useFakePdf =
       typeof fakeEnv === 'boolean' ? fakeEnv : fakeEnv === 'true';
     const forceInlineEnv = this.configService.get<boolean | string>(
       'PRINT_FORCE_INLINE_PROCESSING',
     );
-    this.forceInlineProcessing =
+    const forceInlineProcessing =
       typeof forceInlineEnv === 'boolean'
         ? forceInlineEnv
         : forceInlineEnv === 'true';
     const autoInstallEnv = this.configService.get<boolean | string>(
       'PRINT_AUTO_INSTALL_PLAYWRIGHT_CHROMIUM',
     );
-    this.autoInstallPlaywrightChromium =
+    const autoInstallPlaywrightChromium =
       typeof autoInstallEnv === 'boolean'
         ? autoInstallEnv
         : autoInstallEnv !== 'false';
-    this.requeueOnBootLimit =
+    const requeueOnBootLimit =
       this.configService.get<number>('PRINT_REQUEUE_ON_BOOT_LIMIT') ?? 100;
-    this.paperBrandName = this.resolvePaperBrandName();
-    this.paperBrandMeta =
+    const paperBrandName = this.resolvePaperBrandName();
+    const paperBrandMeta =
       this.configService.get<string>('PRINT_PAPER_BRAND_META')?.trim() ?? '';
+    const printFontsDir =
+      this.configService.get<string>('PRINT_FONTS_DIR')?.trim() ?? '';
+
+    this.defaultPrintSettings = {
+      maxQuestions,
+      maxEmbeddedBytes,
+      useFakePdf,
+      forceInlineProcessing,
+      autoInstallPlaywrightChromium,
+      requeueOnBootLimit,
+      paperBrandName,
+      paperBrandMeta,
+      printFontsDir,
+    };
+    this.maxQuestions = maxQuestions;
+    this.maxEmbeddedBytes = maxEmbeddedBytes;
+    this.useFakePdf = useFakePdf;
+    this.forceInlineProcessing = forceInlineProcessing;
+    this.autoInstallPlaywrightChromium = autoInstallPlaywrightChromium;
+    this.requeueOnBootLimit = requeueOnBootLimit;
+    this.paperBrandName = paperBrandName;
+    this.paperBrandMeta = paperBrandMeta;
+    this.printFontsDir = printFontsDir;
 
     this.paperTemplate = this.loadTemplate(
       'paper.html',
@@ -472,10 +514,12 @@ export class PrintEngineService implements OnModuleInit {
   // BullMQ worker is managed via @nestjs/bullmq Processor.
 
   async onModuleInit() {
+    await this.refreshRuntimeSettings(true);
     await this.requeueQueuedJobsOnBoot();
   }
 
   async createJob(userId: string, dto: PrintJobCreateDto) {
+    await this.refreshRuntimeSettings();
     const { config, items } = await this.resolveJobItems(dto);
     if (items.length === 0) {
       throw new BadRequestException({
@@ -517,6 +561,7 @@ export class PrintEngineService implements OnModuleInit {
   }
 
   async createPracticeJob(userId: string, dto: PrintPracticeJobDto) {
+    await this.refreshRuntimeSettings();
     const count = dto.count;
     if (!count || Number.isNaN(count)) {
       throw new BadRequestException({
@@ -728,6 +773,7 @@ export class PrintEngineService implements OnModuleInit {
   }
 
   private async enqueue(jobId: string, options?: { forceReset?: boolean }) {
+    await this.refreshRuntimeSettings();
     if (this.forceInlineProcessing) {
       setImmediate(() => {
         this.processJob(jobId).catch((err) =>
@@ -798,6 +844,7 @@ export class PrintEngineService implements OnModuleInit {
 
   private async requeueQueuedJobsOnBoot() {
     try {
+      await this.refreshRuntimeSettings();
       const queued = await this.prisma.printJob.findMany({
         where: { status: PrintJobStatus.QUEUED },
         orderBy: { createdAt: 'asc' },
@@ -820,6 +867,7 @@ export class PrintEngineService implements OnModuleInit {
   }
 
   async processJob(jobId: string) {
+    await this.refreshRuntimeSettings();
     const job = await this.prisma.printJob.findUnique({
       where: { id: jobId },
       include: {
@@ -1970,6 +2018,172 @@ export class PrintEngineService implements OnModuleInit {
     return appName.replace(/([a-z])([A-Z])/g, '$1 $2');
   }
 
+  private async refreshRuntimeSettings(force = false) {
+    const now = Date.now();
+    if (
+      !force &&
+      now - this.siteSettingsLastLoadedAt <
+        PrintEngineService.SITE_SETTINGS_CACHE_TTL_MS
+    ) {
+      return;
+    }
+
+    if (this.siteSettingsLoadPromise) {
+      await this.siteSettingsLoadPromise;
+      return;
+    }
+
+    this.siteSettingsLoadPromise = (async () => {
+      const publishedSiteSettings = await this.prisma.appConfig.findFirst({
+        where: {
+          key: PrintEngineService.SITE_SETTINGS_KEY,
+          status: CmsConfigStatus.PUBLISHED,
+        },
+        orderBy: { version: 'desc' },
+        select: { configJson: true },
+      });
+
+      const runtimeOverrides = this.parseSiteSettings(
+        publishedSiteSettings?.configJson,
+      );
+      this.applyRuntimeSettings(runtimeOverrides);
+      this.siteSettingsLastLoadedAt = Date.now();
+    })();
+
+    try {
+      await this.siteSettingsLoadPromise;
+    } catch (err) {
+      this.logger.warn(
+        `Failed loading ${PrintEngineService.SITE_SETTINGS_KEY}: ${this.formatError(err)}.`,
+      );
+      this.applyRuntimeSettings({});
+      this.siteSettingsLastLoadedAt = Date.now();
+    } finally {
+      this.siteSettingsLoadPromise = null;
+    }
+  }
+
+  private parseSiteSettings(value: Prisma.JsonValue | null | undefined) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return {} as Record<string, unknown>;
+    }
+    return value as Record<string, unknown>;
+  }
+
+  private applyRuntimeSettings(overrides: Record<string, unknown>) {
+    const previousFontsDir = this.printFontsDir;
+    this.maxQuestions = this.readNumberSetting(
+      overrides,
+      'PRINT_MAX_QUESTIONS',
+      this.defaultPrintSettings.maxQuestions,
+      1,
+    );
+    this.maxEmbeddedBytes = this.readNumberSetting(
+      overrides,
+      'PRINT_MAX_EMBEDDED_IMAGE_BYTES',
+      this.defaultPrintSettings.maxEmbeddedBytes,
+      1024,
+    );
+    this.useFakePdf = this.readBooleanSetting(
+      overrides,
+      'PRINT_FAKE_PDF',
+      this.defaultPrintSettings.useFakePdf,
+    );
+    this.forceInlineProcessing = this.readBooleanSetting(
+      overrides,
+      'PRINT_FORCE_INLINE_PROCESSING',
+      this.defaultPrintSettings.forceInlineProcessing,
+    );
+    this.autoInstallPlaywrightChromium = this.readBooleanSetting(
+      overrides,
+      'PRINT_AUTO_INSTALL_PLAYWRIGHT_CHROMIUM',
+      this.defaultPrintSettings.autoInstallPlaywrightChromium,
+    );
+    this.requeueOnBootLimit = this.readNumberSetting(
+      overrides,
+      'PRINT_REQUEUE_ON_BOOT_LIMIT',
+      this.defaultPrintSettings.requeueOnBootLimit,
+      0,
+    );
+    this.paperBrandName = this.readStringSetting(
+      overrides,
+      'PRINT_PAPER_BRAND_NAME',
+      this.defaultPrintSettings.paperBrandName,
+    );
+    this.paperBrandMeta = this.readStringSetting(
+      overrides,
+      'PRINT_PAPER_BRAND_META',
+      this.defaultPrintSettings.paperBrandMeta,
+    );
+    this.printFontsDir = this.readStringSetting(
+      overrides,
+      'PRINT_FONTS_DIR',
+      this.defaultPrintSettings.printFontsDir,
+    );
+
+    if (previousFontsDir !== this.printFontsDir) {
+      this.embeddedFontStyles = this.loadEmbeddedFontStyles();
+    }
+  }
+
+  private readStringSetting(
+    overrides: Record<string, unknown>,
+    key: string,
+    fallback: string,
+  ) {
+    const raw = overrides[key];
+    if (typeof raw === 'string') {
+      return raw.trim();
+    }
+    if (raw == null) {
+      return fallback;
+    }
+    return String(raw).trim();
+  }
+
+  private readNumberSetting(
+    overrides: Record<string, unknown>,
+    key: string,
+    fallback: number,
+    min?: number,
+  ) {
+    const raw = overrides[key];
+    const parsed =
+      typeof raw === 'number'
+        ? raw
+        : typeof raw === 'string'
+          ? Number(raw)
+          : NaN;
+    if (!Number.isFinite(parsed)) {
+      return fallback;
+    }
+    if (typeof min === 'number' && parsed < min) {
+      return fallback;
+    }
+    return parsed;
+  }
+
+  private readBooleanSetting(
+    overrides: Record<string, unknown>,
+    key: string,
+    fallback: boolean,
+  ) {
+    const raw = overrides[key];
+    if (typeof raw === 'boolean') {
+      return raw;
+    }
+    if (typeof raw === 'string') {
+      const normalized = raw.trim().toLowerCase();
+      if (['true', '1', 'yes', 'on'].includes(normalized)) {
+        return true;
+      }
+      if (['false', '0', 'no', 'off'].includes(normalized)) {
+        return false;
+      }
+    }
+    return fallback;
+  }
+
   private loadKatexStyles() {
     try {
       const cssPath = require.resolve('katex/dist/katex.min.css');
@@ -2171,8 +2385,7 @@ export class PrintEngineService implements OnModuleInit {
   }
 
   private getPrintFontPathCandidates(relativePath: string) {
-    const configuredRoot =
-      this.configService.get<string>('PRINT_FONTS_DIR')?.trim() ?? '';
+    const configuredRoot = this.printFontsDir;
     const roots = [
       configuredRoot,
       join(process.cwd(), 'src', 'modules', 'print-engine', 'fonts'),
