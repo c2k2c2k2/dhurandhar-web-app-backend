@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { PrintEngineService } from './print-engine.service';
+import { PRINT_QUEUE_NAME } from './print-queue.constants';
 
 const parseConcurrency = (value: string | undefined, fallback: number) => {
   const parsed = Number(value);
@@ -14,7 +15,7 @@ const PRINT_CONCURRENCY = parseConcurrency(
 );
 
 @Injectable()
-@Processor('print-jobs', { concurrency: PRINT_CONCURRENCY })
+@Processor(PRINT_QUEUE_NAME, { concurrency: PRINT_CONCURRENCY })
 export class PrintJobsConsumer extends WorkerHost {
   private readonly logger = new Logger(PrintJobsConsumer.name);
 

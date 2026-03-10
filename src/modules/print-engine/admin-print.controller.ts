@@ -27,6 +27,7 @@ export class AdminPrintController {
       type: PrintJobType.TEST,
       testId,
       includeAnswerKey: dto.includeAnswerKey,
+      durationMinutes: dto.durationMinutes,
       title: dto.title,
       subtitle: dto.subtitle,
     });

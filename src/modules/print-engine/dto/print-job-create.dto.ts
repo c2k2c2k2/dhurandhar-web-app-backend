@@ -1,5 +1,13 @@
 import { PrintJobType } from '@prisma/client';
-import { IsArray, IsBoolean, IsEnum, IsOptional, IsString } from 'class-validator';
+import {
+  IsArray,
+  IsBoolean,
+  IsEnum,
+  IsInt,
+  IsOptional,
+  IsString,
+  Min,
+} from 'class-validator';
 
 export class PrintJobCreateDto {
   @IsEnum(PrintJobType)
@@ -17,6 +25,11 @@ export class PrintJobCreateDto {
   @IsOptional()
   @IsBoolean()
   includeAnswerKey?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  durationMinutes?: number;
 
   @IsOptional()
   @IsString()

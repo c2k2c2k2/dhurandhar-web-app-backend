@@ -31,10 +31,18 @@ const QUESTION_ALLOWED_TAGS = [
 ] as const;
 
 const QUESTION_ALLOWED_ATTRIBUTES: Record<string, string[]> = {
+  p: ['data-question-font', 'class'],
   span: ['data-question-font', 'data-question-math-inline', 'class'],
-  div: ['data-question-math-block', 'class'],
-  th: ['colspan', 'rowspan'],
-  td: ['colspan', 'rowspan'],
+  div: ['data-question-font', 'data-question-math-block', 'class'],
+  ul: ['data-question-font', 'class'],
+  ol: ['data-question-font', 'class'],
+  li: ['data-question-font', 'class'],
+  table: ['class'],
+  thead: ['class'],
+  tbody: ['class'],
+  tr: ['class'],
+  th: ['colspan', 'rowspan', 'data-question-font', 'class'],
+  td: ['colspan', 'rowspan', 'data-question-font', 'class'],
 };
 
 const ENTITY_MAP: Record<string, string> = {

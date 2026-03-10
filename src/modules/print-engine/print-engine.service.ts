@@ -31,6 +31,11 @@ import {
   PrintJobQueryDto,
   PrintPracticeJobDto,
 } from './dto';
+import {
+  PRINT_QUEUE_IS_SHARED,
+  PRINT_QUEUE_NAME,
+  PRINT_RUNTIME_ENV,
+} from './print-queue.constants';
 
 type TestConfig = {
   questionIds?: string[];
@@ -124,35 +129,77 @@ const PRINT_FONT_MARKER_VALUES = new Set([
   'web-surekh-en',
   'isfoc-devanagari-bilingual-web-surekh-en-normal',
 ]);
+const PRINT_OPTION_LABELS = ['A', 'B', 'C', 'D', 'E', 'F'] as const;
 
-const DEFAULT_PAPER_TEMPLATE = `<!DOCTYPE html>
+const DEFAULT_PAPER_TEMPLATE = `<!doctype html>
 <html>
   <head>
     <meta charset="utf-8" />
     <style>
-      @page { size: legal portrait; margin: 12mm 10mm 12mm 10mm; }
+      @page {
+        size: legal portrait;
+        margin: 8mm 8mm 10mm 8mm;
+      }
 
-      * { box-sizing: border-box; }
-      html, body { width: 100%; }
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+      }
+
       body {
         margin: 0;
         color: #111;
         font-family: "Times New Roman", "Noto Sans Devanagari", serif;
-        font-size: 13px;
-        line-height: 1.36;
+        font-size: 12.35px;
+        line-height: 1.3;
         -webkit-font-smoothing: antialiased;
         text-rendering: optimizeLegibility;
       }
 
       {{fontFaceStyles}}
 
-      .paper-shell { width: 100%; }
+      .paper-watermark {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: rgba(15, 23, 42, 0.06);
+        font-size: 62px;
+        font-weight: 700;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        transform: rotate(-28deg);
+        pointer-events: none;
+        user-select: none;
+        z-index: 0;
+      }
+
+      .paper-shell {
+        width: 100%;
+        position: relative;
+        z-index: 1;
+      }
+
+      .paper-shell.layout-dense {
+        font-size: 11.2px;
+        line-height: 1.18;
+      }
+
+      .paper-shell.layout-ultra-dense {
+        font-size: 10.75px;
+        line-height: 1.13;
+      }
 
       .paper-header {
         border: 1.6px solid #0f172a;
         border-radius: 14px;
-        padding: 10px 14px 8px;
-        margin-bottom: 10px;
+        padding: 8px 12px 7px;
+        margin-bottom: 8px;
       }
 
       .paper-header-row {
@@ -164,8 +211,8 @@ const DEFAULT_PAPER_TEMPLATE = `<!DOCTYPE html>
 
       .paper-meta {
         width: 26%;
-        font-size: 13px;
-        line-height: 1.35;
+        font-size: 12.2px;
+        line-height: 1.28;
       }
 
       .paper-meta.right {
@@ -183,7 +230,7 @@ const DEFAULT_PAPER_TEMPLATE = `<!DOCTYPE html>
 
       .paper-brand-name {
         margin: 0;
-        font-size: 30px;
+        font-size: 28px;
         line-height: 1.05;
         font-style: italic;
         font-weight: 700;
@@ -196,32 +243,97 @@ const DEFAULT_PAPER_TEMPLATE = `<!DOCTYPE html>
       }
 
       .paper-title {
-        margin: 8px 0 0;
+        margin: 6px 0 0;
         text-align: center;
-        font-size: 25px;
-        line-height: 1.25;
+        font-size: 22px;
+        line-height: 1.18;
         font-weight: 700;
       }
 
       .paper-subtitle {
-        margin: 2px 0 0;
+        margin: 1px 0 0;
         text-align: center;
-        font-size: 12px;
+        font-size: 11.2px;
+      }
+
+      .paper-shell.layout-dense .paper-header,
+      .paper-shell.layout-ultra-dense .paper-header {
+        padding: 5px 10px 4px;
+        margin-bottom: 5px;
+        border-radius: 10px;
+      }
+
+      .paper-shell.layout-dense .paper-header-row,
+      .paper-shell.layout-ultra-dense .paper-header-row {
+        gap: 8px;
+      }
+
+      .paper-shell.layout-dense .paper-meta,
+      .paper-shell.layout-ultra-dense .paper-meta {
+        width: 25%;
+        font-size: 10.4px;
+        line-height: 1.14;
+      }
+
+      .paper-shell.layout-dense .paper-brand-name {
+        font-size: 21px;
+      }
+
+      .paper-shell.layout-ultra-dense .paper-brand-name {
+        font-size: 18px;
+      }
+
+      .paper-shell.layout-dense .paper-brand-meta,
+      .paper-shell.layout-ultra-dense .paper-brand-meta {
+        margin-top: 1px;
+        font-size: 9.4px;
+      }
+
+      .paper-shell.layout-dense .paper-title {
+        margin-top: 3px;
+        font-size: 16px;
+        line-height: 1.06;
+      }
+
+      .paper-shell.layout-ultra-dense .paper-title {
+        margin-top: 2px;
+        font-size: 14px;
+        line-height: 1.02;
+      }
+
+      .paper-shell.layout-dense .paper-subtitle {
+        font-size: 9.4px;
+      }
+
+      .paper-shell.layout-ultra-dense .paper-subtitle {
+        display: none;
       }
 
       .questions {
         margin: 0;
-        padding-left: 22px;
+        padding-left: 20px;
         column-count: 2;
-        column-gap: 16px;
+        column-gap: 12px;
         column-fill: auto;
+      }
+
+      .paper-shell.layout-dense .questions,
+      .paper-shell.layout-ultra-dense .questions {
+        padding-left: 18px;
+        column-gap: 10px;
       }
 
       .question {
         break-inside: avoid-column;
         page-break-inside: avoid;
-        margin: 0 0 7px;
-        padding-right: 4px;
+        margin: 0 0 5px;
+        padding-right: 2px;
+      }
+
+      .paper-shell.layout-dense .question,
+      .paper-shell.layout-ultra-dense .question {
+        margin-bottom: 2px;
+        padding-right: 1px;
       }
 
       .question::marker {
@@ -229,7 +341,7 @@ const DEFAULT_PAPER_TEMPLATE = `<!DOCTYPE html>
       }
 
       .statement p {
-        margin: 0 0 3px;
+        margin: 0 0 2px;
       }
 
       .statement p:last-child {
@@ -238,25 +350,43 @@ const DEFAULT_PAPER_TEMPLATE = `<!DOCTYPE html>
 
       .statement ul,
       .statement ol {
-        margin: 0 0 3px;
-        padding-left: 16px;
+        margin: 0 0 2px;
+        padding-left: 15px;
       }
 
       .statement li {
-        margin-bottom: 2px;
+        margin-bottom: 1px;
+      }
+
+      .paper-shell.layout-dense .statement p,
+      .paper-shell.layout-ultra-dense .statement p {
+        margin-bottom: 1px;
+      }
+
+      .paper-shell.layout-dense .statement ul,
+      .paper-shell.layout-dense .statement ol,
+      .paper-shell.layout-ultra-dense .statement ul,
+      .paper-shell.layout-ultra-dense .statement ol {
+        margin-bottom: 1px;
+        padding-left: 14px;
+      }
+
+      .paper-shell.layout-dense .statement li,
+      .paper-shell.layout-ultra-dense .statement li {
+        margin-bottom: 0;
       }
 
       .statement table {
         width: 100%;
         border-collapse: collapse;
-        margin: 4px 0;
+        margin: 3px 0;
         table-layout: fixed;
       }
 
       .statement table th,
       .statement table td {
         border: 1px solid #a5b4c3;
-        padding: 3px 5px;
+        padding: 2px 4px;
         vertical-align: top;
         word-break: break-word;
       }
@@ -268,20 +398,37 @@ const DEFAULT_PAPER_TEMPLATE = `<!DOCTYPE html>
       .statement img {
         display: block;
         max-width: 100%;
-        max-height: 160px;
+        max-height: 140px;
         height: auto;
         object-fit: contain;
-        margin: 4px 0;
+        margin: 3px 0;
       }
 
       .question .options {
-        margin: 3px 0 0;
+        margin: 2px 0 0;
         padding: 0;
         list-style: none;
-        counter-reset: option;
         display: grid;
+        gap: 1px 8px;
+      }
+
+      .paper-shell.layout-dense .question .options,
+      .paper-shell.layout-ultra-dense .question .options {
+        margin-top: 1px;
+        gap: 0 5px;
+      }
+
+      .question .options.options-regular {
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 2px 12px;
+      }
+
+      .question .options.options-compact {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 1px 6px;
+      }
+
+      .question .options.options-stacked {
+        grid-template-columns: minmax(0, 1fr);
       }
 
       .question .options > li {
@@ -289,18 +436,43 @@ const DEFAULT_PAPER_TEMPLATE = `<!DOCTYPE html>
         break-inside: avoid;
         display: flex;
         align-items: flex-start;
-        gap: 4px;
+        gap: 3px;
       }
 
-      .question .options > li::before {
-        counter-increment: option;
-        content: counter(option) ") ";
+      .paper-shell.layout-dense .question .options > li,
+      .paper-shell.layout-ultra-dense .question .options > li {
+        gap: 2px;
+      }
+
+      .question .options .option-label {
         font-weight: 700;
-        min-width: 14px;
+        min-width: 12px;
+        flex: 0 0 auto;
       }
 
-      .question .options > li > p {
+      .paper-shell.layout-dense .question .options .option-label,
+      .paper-shell.layout-ultra-dense .question .options .option-label {
+        min-width: 10px;
+      }
+
+      .question .options .option-content {
+        min-width: 0;
+      }
+
+      .question .options .option-content > *:first-child {
+        margin-top: 0;
+      }
+
+      .question .options .option-content > *:last-child {
+        margin-bottom: 0;
+      }
+
+      .question .options .option-content p {
         margin: 0;
+      }
+
+      .paper-shell.layout-ultra-dense .question .options.options-compact {
+        gap: 0 3px;
       }
 
       .statement .font-marathi-shree-dev,
@@ -310,8 +482,8 @@ const DEFAULT_PAPER_TEMPLATE = `<!DOCTYPE html>
       .question .options .font-legacy-marathi,
       .question .options [data-question-font="shree-dev"] {
         font-family: "Shree-Dev", "Shree Dev 0708", "Noto Sans Devanagari", serif;
-        font-size: 1.14em;
-        line-height: 1.56;
+        font-size: 1.09em;
+        line-height: 1.42;
       }
 
       .statement .font-marathi-surekh,
@@ -323,8 +495,44 @@ const DEFAULT_PAPER_TEMPLATE = `<!DOCTYPE html>
       .question .options [data-question-font="surekh"],
       .question .options [data-question-font="sulekha"] {
         font-family: "Surekh", "Sulekha", "Noto Sans Devanagari", serif;
-        font-size: 1.14em;
-        line-height: 1.56;
+        font-size: 1.09em;
+        line-height: 1.42;
+      }
+
+      .paper-shell.layout-dense .statement .font-marathi-shree-dev,
+      .paper-shell.layout-dense .statement .font-legacy-marathi,
+      .paper-shell.layout-dense .statement [data-question-font="shree-dev"],
+      .paper-shell.layout-dense .question .options .font-marathi-shree-dev,
+      .paper-shell.layout-dense .question .options .font-legacy-marathi,
+      .paper-shell.layout-dense .question .options [data-question-font="shree-dev"],
+      .paper-shell.layout-ultra-dense .statement .font-marathi-shree-dev,
+      .paper-shell.layout-ultra-dense .statement .font-legacy-marathi,
+      .paper-shell.layout-ultra-dense .statement [data-question-font="shree-dev"],
+      .paper-shell.layout-ultra-dense .question .options .font-marathi-shree-dev,
+      .paper-shell.layout-ultra-dense .question .options .font-legacy-marathi,
+      .paper-shell.layout-ultra-dense .question .options [data-question-font="shree-dev"] {
+        font-size: 1.03em;
+        line-height: 1.24;
+      }
+
+      .paper-shell.layout-dense .statement .font-marathi-surekh,
+      .paper-shell.layout-dense .statement .font-marathi-sulekha,
+      .paper-shell.layout-dense .statement [data-question-font="surekh"],
+      .paper-shell.layout-dense .statement [data-question-font="sulekha"],
+      .paper-shell.layout-dense .question .options .font-marathi-surekh,
+      .paper-shell.layout-dense .question .options .font-marathi-sulekha,
+      .paper-shell.layout-dense .question .options [data-question-font="surekh"],
+      .paper-shell.layout-dense .question .options [data-question-font="sulekha"],
+      .paper-shell.layout-ultra-dense .statement .font-marathi-surekh,
+      .paper-shell.layout-ultra-dense .statement .font-marathi-sulekha,
+      .paper-shell.layout-ultra-dense .statement [data-question-font="surekh"],
+      .paper-shell.layout-ultra-dense .statement [data-question-font="sulekha"],
+      .paper-shell.layout-ultra-dense .question .options .font-marathi-surekh,
+      .paper-shell.layout-ultra-dense .question .options .font-marathi-sulekha,
+      .paper-shell.layout-ultra-dense .question .options [data-question-font="surekh"],
+      .paper-shell.layout-ultra-dense .question .options [data-question-font="sulekha"] {
+        font-size: 1.03em;
+        line-height: 1.24;
       }
 
       .question-math-inline .katex {
@@ -343,6 +551,86 @@ const DEFAULT_PAPER_TEMPLATE = `<!DOCTYPE html>
         page-break-before: always;
         break-before: page;
       }
+
+      .answer-key {
+        font-size: 12.35px;
+      }
+
+      .answer-key h2 {
+        margin: 0 0 8px;
+        font-size: 18px;
+      }
+
+      .answer-key ol {
+        margin: 0;
+        padding-left: 20px;
+        columns: 2;
+        column-gap: 14px;
+      }
+
+      .answer-key li {
+        break-inside: avoid;
+        margin-bottom: 3px;
+      }
+
+      {{katexStyles}}
+    </style>
+  </head>
+  <body>
+    <div class="paper-watermark">{{watermarkText}}</div>
+    <main class="paper-shell {{layoutClass}}">
+      <header class="paper-header">
+        <div class="paper-header-row">
+          <div class="paper-meta">
+            <div>
+              <span class="paper-meta-label">Time:</span> {{durationLabel}}
+            </div>
+            <div>
+              <span class="paper-meta-label">Marks:</span> {{marksLabel}}
+            </div>
+          </div>
+          <div class="paper-brand">
+            <h1 class="paper-brand-name">{{brandName}}</h1>
+            {{brandMetaBlock}}
+          </div>
+          <div class="paper-meta right">
+            <div><span class="paper-meta-label">Date:</span> {{paperDate}}</div>
+            <div>
+              <span class="paper-meta-label">Questions:</span>
+              {{questionCountLabel}}
+            </div>
+          </div>
+        </div>
+        <h2 class="paper-title">{{title}}</h2>
+        {{subtitleBlock}}
+      </header>
+      <ol class="questions">
+        {{content}}
+      </ol>
+    </main>
+  </body>
+</html>
+`;
+
+const DEFAULT_ANSWER_TEMPLATE = `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      @page {
+        size: legal portrait;
+        margin: 12mm 10mm 12mm 10mm;
+      }
+
+      body {
+        margin: 0;
+        color: #111;
+        font-family: "Times New Roman", "Noto Sans Devanagari", serif;
+        font-size: 13px;
+        line-height: 1.4;
+      }
+
+      {{fontFaceStyles}}
 
       .answer-key {
         font-size: 13px;
@@ -364,49 +652,6 @@ const DEFAULT_PAPER_TEMPLATE = `<!DOCTYPE html>
         break-inside: avoid;
         margin-bottom: 4px;
       }
-
-      {{katexStyles}}
-    </style>
-  </head>
-  <body>
-    <main class="paper-shell">
-      <header class="paper-header">
-        <div class="paper-header-row">
-          <div class="paper-meta">
-            <div><span class="paper-meta-label">Time:</span> {{durationLabel}}</div>
-            <div><span class="paper-meta-label">Marks:</span> {{marksLabel}}</div>
-          </div>
-          <div class="paper-brand">
-            <h1 class="paper-brand-name">{{brandName}}</h1>
-            {{brandMetaBlock}}
-          </div>
-          <div class="paper-meta right">
-            <div><span class="paper-meta-label">Date:</span> {{paperDate}}</div>
-            <div><span class="paper-meta-label">Questions:</span> {{questionCountLabel}}</div>
-          </div>
-        </div>
-        <h2 class="paper-title">{{title}}</h2>
-        {{subtitleBlock}}
-      </header>
-      <ol class="questions">
-        {{content}}
-      </ol>
-    </main>
-  </body>
-</html>`;
-
-const DEFAULT_ANSWER_TEMPLATE = `<!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <style>
-      @page { size: legal portrait; margin: 12mm 10mm 12mm 10mm; }
-      body {
-        margin: 0;
-        color: #111;
-        font-family: "Times New Roman", "Noto Sans Devanagari", serif;
-      }
-      {{fontFaceStyles}}
     </style>
   </head>
   <body>
@@ -417,7 +662,8 @@ const DEFAULT_ANSWER_TEMPLATE = `<!DOCTYPE html>
       </ol>
     </section>
   </body>
-</html>`;
+</html>
+`;
 
 @Injectable()
 export class PrintEngineService implements OnModuleInit {
@@ -441,12 +687,13 @@ export class PrintEngineService implements OnModuleInit {
   private printFontsDir: string;
   private siteSettingsLastLoadedAt = 0;
   private siteSettingsLoadPromise: Promise<void> | null = null;
+  private loggedRuntimeIsolation = false;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly minioService: MinioService,
     private readonly configService: ConfigService,
-    @InjectQueue('print-jobs') private readonly printQueue: Queue,
+    @InjectQueue(PRINT_QUEUE_NAME) private readonly printQueue: Queue,
   ) {
     const maxQuestions =
       this.configService.get<number>('PRINT_MAX_QUESTIONS') ?? 200;
@@ -459,10 +706,11 @@ export class PrintEngineService implements OnModuleInit {
     const forceInlineEnv = this.configService.get<boolean | string>(
       'PRINT_FORCE_INLINE_PROCESSING',
     );
-    const forceInlineProcessing =
-      typeof forceInlineEnv === 'boolean'
+    const forceInlineProcessing = PRINT_QUEUE_IS_SHARED
+      ? typeof forceInlineEnv === 'boolean'
         ? forceInlineEnv
-        : forceInlineEnv === 'true';
+        : forceInlineEnv === 'true'
+      : true;
     const autoInstallEnv = this.configService.get<boolean | string>(
       'PRINT_AUTO_INSTALL_PLAYWRIGHT_CHROMIUM',
     );
@@ -515,6 +763,10 @@ export class PrintEngineService implements OnModuleInit {
 
   async onModuleInit() {
     await this.refreshRuntimeSettings(true);
+    if (!PRINT_QUEUE_IS_SHARED) {
+      this.logRuntimeIsolation();
+      return;
+    }
     await this.requeueQueuedJobsOnBoot();
   }
 
@@ -535,11 +787,15 @@ export class PrintEngineService implements OnModuleInit {
       });
     }
 
+    const initialStatus = this.getInitialJobStatus();
+    const startedAt =
+      initialStatus === PrintJobStatus.RUNNING ? new Date() : null;
     const job = await this.prisma.printJob.create({
       data: {
         type: dto.type,
         configJson: config as Prisma.InputJsonValue,
-        status: PrintJobStatus.QUEUED,
+        status: initialStatus,
+        startedAt,
         createdByUserId: userId,
       },
     });
@@ -605,6 +861,7 @@ export class PrintEngineService implements OnModuleInit {
       type: PrintJobType.PRACTICE,
       questionIds: picked,
       includeAnswerKey: dto.includeAnswerKey,
+      durationMinutes: dto.durationMinutes,
       title: dto.title,
       subtitle: dto.subtitle,
     });
@@ -697,12 +954,15 @@ export class PrintEngineService implements OnModuleInit {
       });
     }
 
+    const initialStatus = this.getInitialJobStatus();
+    const startedAt =
+      initialStatus === PrintJobStatus.RUNNING ? new Date() : null;
     const updated = await this.prisma.printJob.update({
       where: { id: jobId },
       data: {
-        status: PrintJobStatus.QUEUED,
+        status: initialStatus,
         errorMessage: null,
-        startedAt: null,
+        startedAt,
         completedAt: null,
         outputFileAssetId: null,
       },
@@ -777,7 +1037,10 @@ export class PrintEngineService implements OnModuleInit {
     if (this.forceInlineProcessing) {
       setImmediate(() => {
         this.processJob(jobId).catch((err) =>
-          this.logger.error(`Inline print job ${jobId} failed`, err?.stack ?? err),
+          this.logger.error(
+            `Inline print job ${jobId} failed`,
+            err?.stack ?? err,
+          ),
         );
       });
       return;
@@ -845,6 +1108,10 @@ export class PrintEngineService implements OnModuleInit {
   private async requeueQueuedJobsOnBoot() {
     try {
       await this.refreshRuntimeSettings();
+      if (!PRINT_QUEUE_IS_SHARED) {
+        this.logRuntimeIsolation();
+        return;
+      }
       const queued = await this.prisma.printJob.findMany({
         where: { status: PrintJobStatus.QUEUED },
         orderBy: { createdAt: 'asc' },
@@ -945,6 +1212,8 @@ export class PrintEngineService implements OnModuleInit {
         this.renderQuestion(item.question, index + 1, assets),
       )
       .join('');
+    const watermarkText = this.paperBrandName.trim() || title;
+    const layoutClass = this.resolvePaperLayoutClass(job);
 
     const paperHtml = this.renderTemplate(this.paperTemplate, {
       brandName: this.escapeHtml(this.paperBrandName),
@@ -956,6 +1225,8 @@ export class PrintEngineService implements OnModuleInit {
       title: this.escapeHtml(title),
       subtitleBlock,
       content: questionsHtml,
+      layoutClass,
+      watermarkText: this.escapeHtml(watermarkText),
       fontFaceStyles: this.embeddedFontStyles,
       katexStyles: this.katexStyles,
     });
@@ -994,42 +1265,34 @@ export class PrintEngineService implements OnModuleInit {
 
     return `<li class="question">
       <div class="statement">${statement}</div>
-      ${options ? `<ol class="options">${options}</ol>` : ''}
+      ${options ? `<ol class="options ${options.layoutClass}">${options.html}</ol>` : ''}
     </li>`;
   }
 
   private renderOptions(value: unknown, assets: Map<string, string>) {
-    if (!value) return '';
-    if (Array.isArray(value)) {
-      return value
-        .map((item) => `<li>${this.renderContent(item, assets)}</li>`)
-        .join('');
+    const entries = this.extractOptionEntries(value);
+    if (entries.length === 0) {
+      return null;
     }
 
-    if (value && typeof value === 'object') {
-      const obj = value as Record<string, unknown>;
-      const options = obj.options;
-      if (Array.isArray(options)) {
-        return options
-          .map((item) => `<li>${this.renderContent(item, assets)}</li>`)
-          .join('');
-      }
-    }
-
-    return `<li>${this.renderContent(value, assets)}</li>`;
+    return {
+      layoutClass: this.resolveOptionLayoutClass(entries),
+      html: entries
+        .map(
+          (item, index) => `<li>
+            <span class="option-label">${this.escapeHtml(this.getOptionLabel(index))}.</span>
+            <div class="option-content">${this.renderContent(item, assets)}</div>
+          </li>`,
+        )
+        .join(''),
+    };
   }
 
   private renderAnswer(question: any, index: number) {
     if (!question) {
       return `<li>Missing question ${index}</li>`;
     }
-    const answer = question.correctAnswerJson;
-    let answerText = '';
-    if (typeof answer === 'string') {
-      answerText = answer;
-    } else if (answer !== null && answer !== undefined) {
-      answerText = JSON.stringify(answer);
-    }
+    const answerText = this.formatAnswerForPrint(question.correctAnswerJson);
     const safeText = this.escapeHtml(answerText || '—');
     return `<li>${safeText}</li>`;
   }
@@ -1050,17 +1313,18 @@ export class PrintEngineService implements OnModuleInit {
   }
 
   private resolveDurationMinutes(config: PrintJobConfig): number | null {
+    if (
+      typeof config.durationMinutes === 'number' &&
+      Number.isFinite(config.durationMinutes) &&
+      config.durationMinutes > 0
+    ) {
+      return config.durationMinutes;
+    }
+
     if (config.type !== PrintJobType.TEST) {
       return null;
     }
     const testConfig = config as unknown as TestConfig;
-    if (
-      typeof testConfig.durationMinutes === 'number' &&
-      Number.isFinite(testConfig.durationMinutes) &&
-      testConfig.durationMinutes > 0
-    ) {
-      return testConfig.durationMinutes;
-    }
 
     if (
       !Array.isArray(testConfig.sections) ||
@@ -1150,6 +1414,210 @@ export class PrintEngineService implements OnModuleInit {
     return null;
   }
 
+  private getOptionLabel(index: number) {
+    return PRINT_OPTION_LABELS[index] ?? String.fromCharCode(65 + index);
+  }
+
+  private extractOptionEntries(value: unknown): unknown[] {
+    if (!value) {
+      return [];
+    }
+
+    if (Array.isArray(value)) {
+      return value;
+    }
+
+    if (value && typeof value === 'object') {
+      const options = (value as Record<string, unknown>).options;
+      if (Array.isArray(options)) {
+        return options;
+      }
+    }
+
+    return [value];
+  }
+
+  private resolveOptionLayoutClass(entries: unknown[]) {
+    const inspections = entries.map((entry) =>
+      this.inspectOptionContent(entry),
+    );
+
+    if (
+      inspections.some(
+        (entry) =>
+          entry.hasImage ||
+          entry.hasComplexHtml ||
+          entry.hasLineBreak ||
+          entry.textLength > 30,
+      )
+    ) {
+      return 'options-stacked';
+    }
+
+    if (
+      entries.length === 4 &&
+      inspections.every(
+        (entry) => entry.textLength > 0 && entry.textLength <= 14,
+      ) &&
+      inspections.reduce((sum, entry) => sum + entry.textLength, 0) <= 48
+    ) {
+      return 'options-compact';
+    }
+
+    return 'options-regular';
+  }
+
+  private inspectOptionContent(value: unknown): {
+    textLength: number;
+    hasImage: boolean;
+    hasComplexHtml: boolean;
+    hasLineBreak: boolean;
+  } {
+    const summary = {
+      textLength: 0,
+      hasImage: false,
+      hasComplexHtml: false,
+      hasLineBreak: false,
+    };
+
+    const merge = (
+      next: ReturnType<PrintEngineService['inspectOptionContent']>,
+    ) => {
+      summary.textLength += next.textLength;
+      summary.hasImage ||= next.hasImage;
+      summary.hasComplexHtml ||= next.hasComplexHtml;
+      summary.hasLineBreak ||= next.hasLineBreak;
+    };
+
+    if (value === null || value === undefined) {
+      return summary;
+    }
+
+    if (
+      typeof value === 'string' ||
+      typeof value === 'number' ||
+      typeof value === 'boolean'
+    ) {
+      const rawText = String(value);
+      const text = this.sanitizePlainTextForPrint(rawText);
+      summary.textLength += text.replace(/\s+/g, ' ').trim().length;
+      summary.hasLineBreak = rawText.includes('\n');
+      return summary;
+    }
+
+    if (Array.isArray(value)) {
+      value.forEach((item) => merge(this.inspectOptionContent(item)));
+      return summary;
+    }
+
+    if (typeof value !== 'object') {
+      return summary;
+    }
+
+    const obj = value as Record<string, unknown>;
+    const localized = this.resolveLocalizedObjectValue(obj);
+    if (localized && localized !== obj) {
+      return this.inspectOptionContent(localized);
+    }
+
+    const assetId =
+      (obj.imageAssetId as string | undefined) ??
+      (obj.assetId as string | undefined);
+    summary.hasImage = Boolean(assetId);
+
+    const richHtml = this.sanitizeRichHtmlForPrint(
+      typeof obj.html === 'string' ? obj.html : undefined,
+      assetId,
+    );
+    if (richHtml) {
+      summary.textLength += this.extractPlainTextForPrint(richHtml).length;
+      summary.hasLineBreak = /<br\s*\/?>/i.test(richHtml);
+      summary.hasComplexHtml =
+        /<(?:table|thead|tbody|tr|th|td|ul|ol|blockquote|pre|div)\b/i.test(
+          richHtml,
+        );
+    } else {
+      const text = this.sanitizePlainTextForPrint(
+        typeof obj.text === 'string' ? obj.text : undefined,
+        assetId,
+      );
+      if (text) {
+        summary.textLength += text.replace(/\s+/g, ' ').trim().length;
+        summary.hasLineBreak = text.includes('\n');
+      }
+    }
+
+    if (Array.isArray(obj.blocks)) {
+      obj.blocks.forEach((block) => merge(this.inspectOptionContent(block)));
+      return summary;
+    }
+
+    Object.entries(obj)
+      .filter(([key]) => !PRINT_CONTENT_IGNORED_KEYS.has(key))
+      .filter(([key]) => !['html', 'text', 'blocks'].includes(key))
+      .forEach(([, item]) => merge(this.inspectOptionContent(item)));
+
+    return summary;
+  }
+
+  private formatAnswerForPrint(answer: unknown) {
+    if (answer === null || answer === undefined) {
+      return '';
+    }
+
+    if (
+      typeof answer === 'string' ||
+      typeof answer === 'number' ||
+      typeof answer === 'boolean'
+    ) {
+      return String(answer);
+    }
+
+    if (typeof answer !== 'object') {
+      return '';
+    }
+
+    const record = answer as Record<string, unknown>;
+    if (
+      typeof record.optionIndex === 'number' &&
+      Number.isInteger(record.optionIndex)
+    ) {
+      return this.getOptionLabel(record.optionIndex);
+    }
+
+    if (Array.isArray(record.optionIndexes)) {
+      const labels = record.optionIndexes
+        .filter(
+          (value): value is number =>
+            typeof value === 'number' && Number.isInteger(value),
+        )
+        .map((value) => this.getOptionLabel(value));
+      if (labels.length > 0) {
+        return labels.join(', ');
+      }
+    }
+
+    if (record.value !== undefined) {
+      if (typeof record.value === 'boolean') {
+        return record.value ? 'True' : 'False';
+      }
+      return String(record.value);
+    }
+
+    return JSON.stringify(answer);
+  }
+
+  private resolvePaperLayoutClass(job: PrintJobRuntime) {
+    const questionCount = job.items.length;
+    if (questionCount >= 95) {
+      return 'layout-ultra-dense';
+    }
+    if (questionCount >= 70) {
+      return 'layout-dense';
+    }
+    return '';
+  }
+
   private formatNumericLabel(value: number) {
     if (!Number.isFinite(value)) {
       return '—';
@@ -1214,7 +1682,8 @@ export class PrintEngineService implements OnModuleInit {
         html += this.renderRichHtml(richHtml);
       } else if (text) {
         const legacyMathHtml = this.renderLegacyMathFromText(text);
-        html += legacyMathHtml || `<p>${this.renderPlainTextWithFontHints(text)}</p>`;
+        html +=
+          legacyMathHtml || `<p>${this.renderPlainTextWithFontHints(text)}</p>`;
       }
       if (assetId) {
         const src = assets.get(assetId);
@@ -1244,7 +1713,8 @@ export class PrintEngineService implements OnModuleInit {
   private resolveLocalizedObjectValue(obj: Record<string, unknown>) {
     const primaryLanguage =
       typeof obj.primaryLanguage === 'string' ? obj.primaryLanguage : null;
-    const fallbackOrder = primaryLanguage === 'mr' ? ['mr', 'en'] : ['en', 'mr'];
+    const fallbackOrder =
+      primaryLanguage === 'mr' ? ['mr', 'en'] : ['en', 'mr'];
     for (const key of fallbackOrder) {
       const value = obj[key];
       if (value !== null && value !== undefined) {
@@ -1270,7 +1740,10 @@ export class PrintEngineService implements OnModuleInit {
     return null;
   }
 
-  private sanitizeRichHtmlForPrint(value: string | undefined, assetId?: string) {
+  private sanitizeRichHtmlForPrint(
+    value: string | undefined,
+    assetId?: string,
+  ) {
     if (!value) {
       return '';
     }
@@ -1287,7 +1760,10 @@ export class PrintEngineService implements OnModuleInit {
     return withoutMarkers.trim();
   }
 
-  private sanitizePlainTextForPrint(value: string | undefined, assetId?: string) {
+  private sanitizePlainTextForPrint(
+    value: string | undefined,
+    assetId?: string,
+  ) {
     if (!value) {
       return '';
     }
@@ -1374,11 +1850,15 @@ export class PrintEngineService implements OnModuleInit {
         /[\u00A1-\u00FF\u0152\u0153\u0160\u0161\u0178\u017D\u017E\u02C6\u02DC\u2013-\u2022\u2026\u2030\u2039\u203A\u20AC]/g,
       ) || [];
 
-    return surekhGlyphs.length >= Math.max(3, Math.floor(trimmed.length * 0.12));
+    return (
+      surekhGlyphs.length >= Math.max(3, Math.floor(trimmed.length * 0.12))
+    );
   }
 
   private extractPlainTextForPrint(value: string) {
-    const source = value.includes('&lt;') ? this.decodeHtmlEntities(value) : value;
+    const source = value.includes('&lt;')
+      ? this.decodeHtmlEntities(value)
+      : value;
     const withoutTags = source
       .replace(/<style[\s\S]*?<\/style>/gi, ' ')
       .replace(/<script[\s\S]*?<\/script>/gi, ' ')
@@ -1834,7 +2314,7 @@ export class PrintEngineService implements OnModuleInit {
           title: dto.title ?? test.title,
           subtitle: dto.subtitle ?? test.description ?? undefined,
           testId: test.id,
-          durationMinutes: config.durationMinutes,
+          durationMinutes: dto.durationMinutes ?? config.durationMinutes,
           marksPerQuestion: config.marksPerQuestion,
           sections: config.sections,
         } as PrintJobConfig,
@@ -1865,6 +2345,7 @@ export class PrintEngineService implements OnModuleInit {
       config: {
         type: dto.type,
         includeAnswerKey: dto.includeAnswerKey ?? false,
+        durationMinutes: dto.durationMinutes,
         title: dto.title,
         subtitle: dto.subtitle,
         questionIds,
@@ -2025,6 +2506,9 @@ export class PrintEngineService implements OnModuleInit {
       }
     }
 
+    this.logger.warn(
+      `Print template ${fileName} not found on disk; using embedded fallback template.`,
+    );
     return fallback;
   }
 
@@ -2119,6 +2603,9 @@ export class PrintEngineService implements OnModuleInit {
       'PRINT_FORCE_INLINE_PROCESSING',
       this.defaultPrintSettings.forceInlineProcessing,
     );
+    if (!PRINT_QUEUE_IS_SHARED) {
+      this.forceInlineProcessing = true;
+    }
     this.autoInstallPlaywrightChromium = this.readBooleanSetting(
       overrides,
       'PRINT_AUTO_INSTALL_PLAYWRIGHT_CHROMIUM',
@@ -2149,6 +2636,22 @@ export class PrintEngineService implements OnModuleInit {
     if (previousFontsDir !== this.printFontsDir) {
       this.embeddedFontStyles = this.loadEmbeddedFontStyles();
     }
+  }
+
+  private getInitialJobStatus() {
+    return this.forceInlineProcessing
+      ? PrintJobStatus.RUNNING
+      : PrintJobStatus.QUEUED;
+  }
+
+  private logRuntimeIsolation() {
+    if (this.loggedRuntimeIsolation) {
+      return;
+    }
+    this.loggedRuntimeIsolation = true;
+    this.logger.warn(
+      `Print runtime is isolated on queue "${PRINT_QUEUE_NAME}" for NODE_ENV=${PRINT_RUNTIME_ENV}; forcing inline processing and skipping shared queued-job recovery.`,
+    );
   }
 
   private readStringSetting(

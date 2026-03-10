@@ -1,5 +1,13 @@
 import { QuestionDifficulty } from '@prisma/client';
-import { IsArray, IsBoolean, IsEnum, IsInt, IsOptional, IsString, Min } from 'class-validator';
+import {
+  IsArray,
+  IsBoolean,
+  IsEnum,
+  IsInt,
+  IsOptional,
+  IsString,
+  Min,
+} from 'class-validator';
 
 export class PrintPracticeJobDto {
   @IsOptional()
@@ -22,6 +30,11 @@ export class PrintPracticeJobDto {
   @IsOptional()
   @IsBoolean()
   includeAnswerKey?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  durationMinutes?: number;
 
   @IsOptional()
   @IsString()

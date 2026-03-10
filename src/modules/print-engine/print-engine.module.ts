@@ -9,6 +9,7 @@ import { AdminPrintController } from './admin-print.controller';
 import { PrintJobsConsumer } from './print-jobs.consumer';
 import { PrintEngineController } from './print-engine.controller';
 import { PrintEngineService } from './print-engine.service';
+import { PRINT_QUEUE_NAME } from './print-queue.constants';
 
 @Module({
   imports: [
@@ -17,7 +18,7 @@ import { PrintEngineService } from './print-engine.service';
     FilesModule,
     AuthModule,
     AuthorizationModule,
-    BullModule.registerQueue({ name: 'print-jobs' }),
+    BullModule.registerQueue({ name: PRINT_QUEUE_NAME }),
   ],
   controllers: [PrintEngineController, AdminPrintController],
   providers: [PrintEngineService, PrintJobsConsumer],

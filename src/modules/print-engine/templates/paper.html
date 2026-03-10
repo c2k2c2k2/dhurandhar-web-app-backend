@@ -1,11 +1,11 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
   <head>
     <meta charset="utf-8" />
     <style>
       @page {
         size: legal portrait;
-        margin: 12mm 10mm 12mm 10mm;
+        margin: 8mm 8mm 10mm 8mm;
       }
 
       * {
@@ -21,23 +21,52 @@
         margin: 0;
         color: #111;
         font-family: "Times New Roman", "Noto Sans Devanagari", serif;
-        font-size: 13px;
-        line-height: 1.36;
+        font-size: 12.35px;
+        line-height: 1.3;
         -webkit-font-smoothing: antialiased;
         text-rendering: optimizeLegibility;
       }
 
       {{fontFaceStyles}}
 
+      .paper-watermark {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: rgba(15, 23, 42, 0.06);
+        font-size: 62px;
+        font-weight: 700;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        transform: rotate(-28deg);
+        pointer-events: none;
+        user-select: none;
+        z-index: 0;
+      }
+
       .paper-shell {
         width: 100%;
+        position: relative;
+        z-index: 1;
+      }
+
+      .paper-shell.layout-dense {
+        font-size: 11.2px;
+        line-height: 1.18;
+      }
+
+      .paper-shell.layout-ultra-dense {
+        font-size: 10.75px;
+        line-height: 1.13;
       }
 
       .paper-header {
         border: 1.6px solid #0f172a;
         border-radius: 14px;
-        padding: 10px 14px 8px;
-        margin-bottom: 10px;
+        padding: 8px 12px 7px;
+        margin-bottom: 8px;
       }
 
       .paper-header-row {
@@ -49,8 +78,8 @@
 
       .paper-meta {
         width: 26%;
-        font-size: 13px;
-        line-height: 1.35;
+        font-size: 12.2px;
+        line-height: 1.28;
       }
 
       .paper-meta.right {
@@ -68,7 +97,7 @@
 
       .paper-brand-name {
         margin: 0;
-        font-size: 30px;
+        font-size: 28px;
         line-height: 1.05;
         font-style: italic;
         font-weight: 700;
@@ -81,32 +110,97 @@
       }
 
       .paper-title {
-        margin: 8px 0 0;
+        margin: 6px 0 0;
         text-align: center;
-        font-size: 25px;
-        line-height: 1.25;
+        font-size: 22px;
+        line-height: 1.18;
         font-weight: 700;
       }
 
       .paper-subtitle {
-        margin: 2px 0 0;
+        margin: 1px 0 0;
         text-align: center;
-        font-size: 12px;
+        font-size: 11.2px;
+      }
+
+      .paper-shell.layout-dense .paper-header,
+      .paper-shell.layout-ultra-dense .paper-header {
+        padding: 5px 10px 4px;
+        margin-bottom: 5px;
+        border-radius: 10px;
+      }
+
+      .paper-shell.layout-dense .paper-header-row,
+      .paper-shell.layout-ultra-dense .paper-header-row {
+        gap: 8px;
+      }
+
+      .paper-shell.layout-dense .paper-meta,
+      .paper-shell.layout-ultra-dense .paper-meta {
+        width: 25%;
+        font-size: 10.4px;
+        line-height: 1.14;
+      }
+
+      .paper-shell.layout-dense .paper-brand-name {
+        font-size: 21px;
+      }
+
+      .paper-shell.layout-ultra-dense .paper-brand-name {
+        font-size: 18px;
+      }
+
+      .paper-shell.layout-dense .paper-brand-meta,
+      .paper-shell.layout-ultra-dense .paper-brand-meta {
+        margin-top: 1px;
+        font-size: 9.4px;
+      }
+
+      .paper-shell.layout-dense .paper-title {
+        margin-top: 3px;
+        font-size: 16px;
+        line-height: 1.06;
+      }
+
+      .paper-shell.layout-ultra-dense .paper-title {
+        margin-top: 2px;
+        font-size: 14px;
+        line-height: 1.02;
+      }
+
+      .paper-shell.layout-dense .paper-subtitle {
+        font-size: 9.4px;
+      }
+
+      .paper-shell.layout-ultra-dense .paper-subtitle {
+        display: none;
       }
 
       .questions {
         margin: 0;
-        padding-left: 22px;
+        padding-left: 20px;
         column-count: 2;
-        column-gap: 16px;
+        column-gap: 12px;
         column-fill: auto;
+      }
+
+      .paper-shell.layout-dense .questions,
+      .paper-shell.layout-ultra-dense .questions {
+        padding-left: 18px;
+        column-gap: 10px;
       }
 
       .question {
         break-inside: avoid-column;
         page-break-inside: avoid;
-        margin: 0 0 7px;
-        padding-right: 4px;
+        margin: 0 0 5px;
+        padding-right: 2px;
+      }
+
+      .paper-shell.layout-dense .question,
+      .paper-shell.layout-ultra-dense .question {
+        margin-bottom: 2px;
+        padding-right: 1px;
       }
 
       .question::marker {
@@ -114,7 +208,7 @@
       }
 
       .statement p {
-        margin: 0 0 3px;
+        margin: 0 0 2px;
       }
 
       .statement p:last-child {
@@ -123,25 +217,43 @@
 
       .statement ul,
       .statement ol {
-        margin: 0 0 3px;
-        padding-left: 16px;
+        margin: 0 0 2px;
+        padding-left: 15px;
       }
 
       .statement li {
-        margin-bottom: 2px;
+        margin-bottom: 1px;
+      }
+
+      .paper-shell.layout-dense .statement p,
+      .paper-shell.layout-ultra-dense .statement p {
+        margin-bottom: 1px;
+      }
+
+      .paper-shell.layout-dense .statement ul,
+      .paper-shell.layout-dense .statement ol,
+      .paper-shell.layout-ultra-dense .statement ul,
+      .paper-shell.layout-ultra-dense .statement ol {
+        margin-bottom: 1px;
+        padding-left: 14px;
+      }
+
+      .paper-shell.layout-dense .statement li,
+      .paper-shell.layout-ultra-dense .statement li {
+        margin-bottom: 0;
       }
 
       .statement table {
         width: 100%;
         border-collapse: collapse;
-        margin: 4px 0;
+        margin: 3px 0;
         table-layout: fixed;
       }
 
       .statement table th,
       .statement table td {
         border: 1px solid #a5b4c3;
-        padding: 3px 5px;
+        padding: 2px 4px;
         vertical-align: top;
         word-break: break-word;
       }
@@ -153,20 +265,37 @@
       .statement img {
         display: block;
         max-width: 100%;
-        max-height: 160px;
+        max-height: 140px;
         height: auto;
         object-fit: contain;
-        margin: 4px 0;
+        margin: 3px 0;
       }
 
       .question .options {
-        margin: 3px 0 0;
+        margin: 2px 0 0;
         padding: 0;
         list-style: none;
-        counter-reset: option;
         display: grid;
+        gap: 1px 8px;
+      }
+
+      .paper-shell.layout-dense .question .options,
+      .paper-shell.layout-ultra-dense .question .options {
+        margin-top: 1px;
+        gap: 0 5px;
+      }
+
+      .question .options.options-regular {
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 2px 12px;
+      }
+
+      .question .options.options-compact {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 1px 6px;
+      }
+
+      .question .options.options-stacked {
+        grid-template-columns: minmax(0, 1fr);
       }
 
       .question .options > li {
@@ -174,18 +303,43 @@
         break-inside: avoid;
         display: flex;
         align-items: flex-start;
-        gap: 4px;
+        gap: 3px;
       }
 
-      .question .options > li::before {
-        counter-increment: option;
-        content: counter(option) ") ";
+      .paper-shell.layout-dense .question .options > li,
+      .paper-shell.layout-ultra-dense .question .options > li {
+        gap: 2px;
+      }
+
+      .question .options .option-label {
         font-weight: 700;
-        min-width: 14px;
+        min-width: 12px;
+        flex: 0 0 auto;
       }
 
-      .question .options > li > p {
+      .paper-shell.layout-dense .question .options .option-label,
+      .paper-shell.layout-ultra-dense .question .options .option-label {
+        min-width: 10px;
+      }
+
+      .question .options .option-content {
+        min-width: 0;
+      }
+
+      .question .options .option-content > *:first-child {
+        margin-top: 0;
+      }
+
+      .question .options .option-content > *:last-child {
+        margin-bottom: 0;
+      }
+
+      .question .options .option-content p {
         margin: 0;
+      }
+
+      .paper-shell.layout-ultra-dense .question .options.options-compact {
+        gap: 0 3px;
       }
 
       .statement .font-marathi-shree-dev,
@@ -195,8 +349,8 @@
       .question .options .font-legacy-marathi,
       .question .options [data-question-font="shree-dev"] {
         font-family: "Shree-Dev", "Shree Dev 0708", "Noto Sans Devanagari", serif;
-        font-size: 1.14em;
-        line-height: 1.56;
+        font-size: 1.09em;
+        line-height: 1.42;
       }
 
       .statement .font-marathi-surekh,
@@ -208,8 +362,44 @@
       .question .options [data-question-font="surekh"],
       .question .options [data-question-font="sulekha"] {
         font-family: "Surekh", "Sulekha", "Noto Sans Devanagari", serif;
-        font-size: 1.14em;
-        line-height: 1.56;
+        font-size: 1.09em;
+        line-height: 1.42;
+      }
+
+      .paper-shell.layout-dense .statement .font-marathi-shree-dev,
+      .paper-shell.layout-dense .statement .font-legacy-marathi,
+      .paper-shell.layout-dense .statement [data-question-font="shree-dev"],
+      .paper-shell.layout-dense .question .options .font-marathi-shree-dev,
+      .paper-shell.layout-dense .question .options .font-legacy-marathi,
+      .paper-shell.layout-dense .question .options [data-question-font="shree-dev"],
+      .paper-shell.layout-ultra-dense .statement .font-marathi-shree-dev,
+      .paper-shell.layout-ultra-dense .statement .font-legacy-marathi,
+      .paper-shell.layout-ultra-dense .statement [data-question-font="shree-dev"],
+      .paper-shell.layout-ultra-dense .question .options .font-marathi-shree-dev,
+      .paper-shell.layout-ultra-dense .question .options .font-legacy-marathi,
+      .paper-shell.layout-ultra-dense .question .options [data-question-font="shree-dev"] {
+        font-size: 1.03em;
+        line-height: 1.24;
+      }
+
+      .paper-shell.layout-dense .statement .font-marathi-surekh,
+      .paper-shell.layout-dense .statement .font-marathi-sulekha,
+      .paper-shell.layout-dense .statement [data-question-font="surekh"],
+      .paper-shell.layout-dense .statement [data-question-font="sulekha"],
+      .paper-shell.layout-dense .question .options .font-marathi-surekh,
+      .paper-shell.layout-dense .question .options .font-marathi-sulekha,
+      .paper-shell.layout-dense .question .options [data-question-font="surekh"],
+      .paper-shell.layout-dense .question .options [data-question-font="sulekha"],
+      .paper-shell.layout-ultra-dense .statement .font-marathi-surekh,
+      .paper-shell.layout-ultra-dense .statement .font-marathi-sulekha,
+      .paper-shell.layout-ultra-dense .statement [data-question-font="surekh"],
+      .paper-shell.layout-ultra-dense .statement [data-question-font="sulekha"],
+      .paper-shell.layout-ultra-dense .question .options .font-marathi-surekh,
+      .paper-shell.layout-ultra-dense .question .options .font-marathi-sulekha,
+      .paper-shell.layout-ultra-dense .question .options [data-question-font="surekh"],
+      .paper-shell.layout-ultra-dense .question .options [data-question-font="sulekha"] {
+        font-size: 1.03em;
+        line-height: 1.24;
       }
 
       .question-math-inline .katex {
@@ -230,36 +420,41 @@
       }
 
       .answer-key {
-        font-size: 13px;
+        font-size: 12.35px;
       }
 
       .answer-key h2 {
         margin: 0 0 8px;
-        font-size: 20px;
+        font-size: 18px;
       }
 
       .answer-key ol {
         margin: 0;
         padding-left: 20px;
         columns: 2;
-        column-gap: 16px;
+        column-gap: 14px;
       }
 
       .answer-key li {
         break-inside: avoid;
-        margin-bottom: 4px;
+        margin-bottom: 3px;
       }
 
       {{katexStyles}}
     </style>
   </head>
   <body>
-    <main class="paper-shell">
+    <div class="paper-watermark">{{watermarkText}}</div>
+    <main class="paper-shell {{layoutClass}}">
       <header class="paper-header">
         <div class="paper-header-row">
           <div class="paper-meta">
-            <div><span class="paper-meta-label">Time:</span> {{durationLabel}}</div>
-            <div><span class="paper-meta-label">Marks:</span> {{marksLabel}}</div>
+            <div>
+              <span class="paper-meta-label">Time:</span> {{durationLabel}}
+            </div>
+            <div>
+              <span class="paper-meta-label">Marks:</span> {{marksLabel}}
+            </div>
           </div>
           <div class="paper-brand">
             <h1 class="paper-brand-name">{{brandName}}</h1>
@@ -267,7 +462,10 @@
           </div>
           <div class="paper-meta right">
             <div><span class="paper-meta-label">Date:</span> {{paperDate}}</div>
-            <div><span class="paper-meta-label">Questions:</span> {{questionCountLabel}}</div>
+            <div>
+              <span class="paper-meta-label">Questions:</span>
+              {{questionCountLabel}}
+            </div>
           </div>
         </div>
         <h2 class="paper-title">{{title}}</h2>
