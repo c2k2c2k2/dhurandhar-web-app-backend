@@ -49,6 +49,20 @@ type TestConfig = {
   negativeMarksPerWrong?: number;
 };
 
+type AttemptQuestionReviewStatus = 'CORRECT' | 'WRONG' | 'SKIPPED';
+
+type AttemptQuestionReview = {
+  questionId: string;
+  orderIndex: number;
+  answerJson: Prisma.JsonValue | null;
+  correctAnswerJson: Prisma.JsonValue | null;
+  isCorrect: boolean | null;
+  status: AttemptQuestionReviewStatus;
+  scoreDelta: number;
+  marks: number;
+  negativeMark: number;
+};
+
 @Injectable()
 export class TestEngineService {
   constructor(private readonly prisma: PrismaService) {}
@@ -372,95 +386,19 @@ export class TestEngineService {
 
     const testConfig = (attempt.test?.configJson as TestConfig) ?? {};
     const marksMap = await this.getMarksMap(attempt.testId);
-    const defaultMark = this.getDefaultMark(testConfig);
-    const defaultNegativeMark = this.getDefaultNegativeMark(testConfig);
     const sectionRuleByOrder = this.buildSectionRuleByOrder(testConfig);
-
-    let totalScore = 0;
-    let correctCount = 0;
-    let wrongCount = 0;
-
-    const perTopic: Record<string, { correct: number; wrong: number; total: number }> = {};
-    const perSubject: Record<string, { correct: number; wrong: number; total: number }> = {};
-    const perSection: Record<
-      string,
-      { correct: number; wrong: number; total: number; netScore: number }
-    > = {};
 
     const orderedAttemptQuestions = [...attempt.questions].sort(
       (a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0),
     );
 
-    for (let index = 0; index < orderedAttemptQuestions.length; index += 1) {
-      const attemptQuestion = orderedAttemptQuestions[index];
-      const question = attemptQuestion.question;
-      if (!question) {
-        continue;
-      }
-
-      const answer = answersMap.get(question.id);
-      const isCorrect = this.isEqual(answer, question.correctAnswerJson);
-
-      const sectionRule = sectionRuleByOrder.get(attemptQuestion.orderIndex ?? index);
-      const mark = marksMap.get(question.id) ?? sectionRule?.marksPerQuestion ?? defaultMark;
-      const negativeMark =
-        sectionRule?.negativeMarksPerWrong ?? defaultNegativeMark;
-
-      if (isCorrect) {
-        totalScore += mark;
-        correctCount += 1;
-      } else {
-        totalScore -= negativeMark;
-        wrongCount += 1;
-      }
-
-      const topicKey = question.topicId ?? 'unknown';
-      const subjectKey = question.subjectId;
-
-      perTopic[topicKey] = perTopic[topicKey] ?? { correct: 0, wrong: 0, total: 0 };
-      perTopic[topicKey].total += 1;
-      if (isCorrect) {
-        perTopic[topicKey].correct += 1;
-      } else {
-        perTopic[topicKey].wrong += 1;
-      }
-
-      perSubject[subjectKey] = perSubject[subjectKey] ?? { correct: 0, wrong: 0, total: 0 };
-      perSubject[subjectKey].total += 1;
-      if (isCorrect) {
-        perSubject[subjectKey].correct += 1;
-      } else {
-        perSubject[subjectKey].wrong += 1;
-      }
-
-      const sectionKey = sectionRule?.sectionKey ?? 'default';
-      perSection[sectionKey] = perSection[sectionKey] ?? {
-        correct: 0,
-        wrong: 0,
-        total: 0,
-        netScore: 0,
-      };
-      perSection[sectionKey].total += 1;
-      if (isCorrect) {
-        perSection[sectionKey].correct += 1;
-        perSection[sectionKey].netScore += mark;
-      } else {
-        perSection[sectionKey].wrong += 1;
-        perSection[sectionKey].netScore -= negativeMark;
-      }
-    }
-
-    const scoreJson = {
-      totalQuestions: orderedAttemptQuestions.length,
-      correctCount,
-      wrongCount,
-      totalScore,
-      marksPerQuestion: defaultMark,
-      negativeMarksPerWrong: defaultNegativeMark,
-      perSection,
-      perTopic,
-      perSubject,
-    };
+    const { totalScore, scoreJson, questionResults } = this.evaluateAttemptQuestions({
+      orderedAttemptQuestions,
+      answersMap,
+      marksMap,
+      testConfig,
+      sectionRuleByOrder,
+    });
 
     await this.prisma.$transaction([
       this.prisma.attempt.update({
@@ -481,7 +419,7 @@ export class TestEngineService {
       }),
     ]);
 
-    return { totalScore, scoreJson };
+    return { totalScore, scoreJson, questionResults };
   }
 
   async listAttempts(userId: string, query: AttemptQueryDto) {
@@ -518,7 +456,11 @@ export class TestEngineService {
       });
     }
 
-    const questions = attempt.questions.map((item) => {
+    const orderedAttemptQuestions = [...attempt.questions].sort(
+      (a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0),
+    );
+
+    const questions = orderedAttemptQuestions.map((item) => {
       const question = item.question;
       if (!question) return null;
       return {
@@ -527,7 +469,23 @@ export class TestEngineService {
       };
     }).filter(Boolean);
 
-    return { ...attempt, questions };
+    let questionResults: AttemptQuestionReview[] | undefined;
+
+    if (attempt.status === AttemptStatus.EVALUATED) {
+      const answersMap = this.normalizeAnswers(attempt.answersJson as Prisma.JsonValue | null);
+      const testConfig = (attempt.test?.configJson as TestConfig) ?? {};
+      const marksMap = await this.getMarksMap(attempt.testId);
+      const sectionRuleByOrder = this.buildSectionRuleByOrder(testConfig);
+      questionResults = this.evaluateAttemptQuestions({
+        orderedAttemptQuestions,
+        answersMap,
+        marksMap,
+        testConfig,
+        sectionRuleByOrder,
+      }).questionResults;
+    }
+
+    return { ...attempt, questions, questionResults };
   }
 
   private async syncTestQuestions(
@@ -750,6 +708,166 @@ export class TestEngineService {
       }
     }
     return map;
+  }
+
+  private evaluateAttemptQuestions(params: {
+    orderedAttemptQuestions: Array<{
+      orderIndex: number | null;
+      question: {
+        id: string;
+        subjectId: string;
+        topicId: string | null;
+        correctAnswerJson: Prisma.JsonValue | null;
+      } | null;
+    }>;
+    answersMap: Map<string, unknown>;
+    marksMap: Map<string, number>;
+    testConfig: TestConfig;
+    sectionRuleByOrder: Map<
+      number,
+      {
+        sectionKey: string;
+        marksPerQuestion?: number;
+        negativeMarksPerWrong?: number;
+      }
+    >;
+  }) {
+    const defaultMark = this.getDefaultMark(params.testConfig);
+    const defaultNegativeMark = this.getDefaultNegativeMark(params.testConfig);
+
+    let totalScore = 0;
+    let correctCount = 0;
+    let wrongCount = 0;
+    let skipCount = 0;
+
+    const perTopic: Record<
+      string,
+      { correct: number; wrong: number; skipped: number; total: number }
+    > = {};
+    const perSubject: Record<
+      string,
+      { correct: number; wrong: number; skipped: number; total: number }
+    > = {};
+    const perSection: Record<
+      string,
+      { correct: number; wrong: number; skipped: number; total: number; netScore: number }
+    > = {};
+    const questionResults: AttemptQuestionReview[] = [];
+
+    for (let index = 0; index < params.orderedAttemptQuestions.length; index += 1) {
+      const attemptQuestion = params.orderedAttemptQuestions[index];
+      const question = attemptQuestion.question;
+      if (!question) {
+        continue;
+      }
+
+      const answer = params.answersMap.get(question.id);
+      const hasAnswer = this.hasMeaningfulAnswer(answer);
+      const isCorrect = hasAnswer ? this.isEqual(answer, question.correctAnswerJson) : null;
+
+      const sectionRule = params.sectionRuleByOrder.get(attemptQuestion.orderIndex ?? index);
+      const mark =
+        params.marksMap.get(question.id) ?? sectionRule?.marksPerQuestion ?? defaultMark;
+      const negativeMark = sectionRule?.negativeMarksPerWrong ?? defaultNegativeMark;
+      const scoreDelta =
+        isCorrect === true ? mark : isCorrect === false ? -negativeMark : 0;
+      const status: AttemptQuestionReviewStatus =
+        isCorrect === true ? 'CORRECT' : isCorrect === false ? 'WRONG' : 'SKIPPED';
+
+      totalScore += scoreDelta;
+      if (isCorrect === true) {
+        correctCount += 1;
+      } else if (isCorrect === false) {
+        wrongCount += 1;
+      } else {
+        skipCount += 1;
+      }
+
+      const topicKey = question.topicId ?? 'unknown';
+      const subjectKey = question.subjectId;
+
+      perTopic[topicKey] = perTopic[topicKey] ?? {
+        correct: 0,
+        wrong: 0,
+        skipped: 0,
+        total: 0,
+      };
+      perTopic[topicKey].total += 1;
+      if (isCorrect === true) {
+        perTopic[topicKey].correct += 1;
+      } else if (isCorrect === false) {
+        perTopic[topicKey].wrong += 1;
+      } else {
+        perTopic[topicKey].skipped += 1;
+      }
+
+      perSubject[subjectKey] = perSubject[subjectKey] ?? {
+        correct: 0,
+        wrong: 0,
+        skipped: 0,
+        total: 0,
+      };
+      perSubject[subjectKey].total += 1;
+      if (isCorrect === true) {
+        perSubject[subjectKey].correct += 1;
+      } else if (isCorrect === false) {
+        perSubject[subjectKey].wrong += 1;
+      } else {
+        perSubject[subjectKey].skipped += 1;
+      }
+
+      const sectionKey = sectionRule?.sectionKey ?? 'default';
+      perSection[sectionKey] = perSection[sectionKey] ?? {
+        correct: 0,
+        wrong: 0,
+        skipped: 0,
+        total: 0,
+        netScore: 0,
+      };
+      perSection[sectionKey].total += 1;
+      if (isCorrect === true) {
+        perSection[sectionKey].correct += 1;
+      } else if (isCorrect === false) {
+        perSection[sectionKey].wrong += 1;
+      } else {
+        perSection[sectionKey].skipped += 1;
+      }
+      perSection[sectionKey].netScore += scoreDelta;
+
+      questionResults.push({
+        questionId: question.id,
+        orderIndex: attemptQuestion.orderIndex ?? index,
+        answerJson: hasAnswer ? ((answer as Prisma.JsonValue | undefined) ?? null) : null,
+        correctAnswerJson: question.correctAnswerJson ?? null,
+        isCorrect,
+        status,
+        scoreDelta,
+        marks: mark,
+        negativeMark,
+      });
+    }
+
+    const attemptedCount = correctCount + wrongCount;
+    const accuracyPct = attemptedCount > 0 ? Math.round((correctCount / attemptedCount) * 100) : 0;
+
+    return {
+      totalScore,
+      scoreJson: {
+        totalQuestions: questionResults.length,
+        attemptedCount,
+        correctCount,
+        wrongCount,
+        skipCount,
+        accuracyPct,
+        totalScore,
+        marksPerQuestion: defaultMark,
+        negativeMarksPerWrong: defaultNegativeMark,
+        perSection,
+        perTopic,
+        perSubject,
+      },
+      questionResults,
+    };
   }
 
   private getDefaultMark(config?: TestConfig) {
@@ -1019,6 +1137,40 @@ export class TestEngineService {
     }
 
     return map;
+  }
+
+  private hasMeaningfulAnswer(value: unknown): boolean {
+    if (value === null || value === undefined) {
+      return false;
+    }
+
+    if (typeof value === 'string') {
+      return value.trim().length > 0;
+    }
+
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      return true;
+    }
+
+    if (Array.isArray(value)) {
+      return value.some((item) => this.hasMeaningfulAnswer(item));
+    }
+
+    if (typeof value === 'object') {
+      const record = value as Record<string, unknown>;
+      if (typeof record.optionIndex === 'number') {
+        return true;
+      }
+      if (Array.isArray(record.optionIndexes)) {
+        return record.optionIndexes.some((item) => typeof item === 'number');
+      }
+      if ('value' in record) {
+        return this.hasMeaningfulAnswer(record.value);
+      }
+      return Object.values(record).some((item) => this.hasMeaningfulAnswer(item));
+    }
+
+    return false;
   }
 
   private isEqual(a: unknown, b: unknown) {
