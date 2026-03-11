@@ -4,6 +4,10 @@ import { QuestionDifficulty, QuestionType } from '@prisma/client';
 export class QuestionQueryDto {
   @IsOptional()
   @IsString()
+  q?: string;
+
+  @IsOptional()
+  @IsString()
   subjectId?: string;
 
   @IsOptional()
@@ -21,4 +25,12 @@ export class QuestionQueryDto {
   @IsOptional()
   @IsBooleanString()
   isPublished?: string;
+
+  @IsOptional()
+  @IsString()
+  page?: string;
+
+  @IsOptional()
+  @IsString()
+  pageSize?: string;
 }

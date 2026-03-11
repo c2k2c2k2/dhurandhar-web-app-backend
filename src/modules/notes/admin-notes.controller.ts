@@ -123,6 +123,13 @@ export class AdminNotesController {
     );
   }
 
+  @Get(':noteId')
+  @RequireUserType('ADMIN')
+  @Policy('notes.read')
+  getNote(@Param('noteId') noteId: string) {
+    return this.notesService.getNote(noteId, true);
+  }
+
   @Post(':noteId/revoke-sessions')
   @RequireUserType('ADMIN')
   @Policy('notes.write')

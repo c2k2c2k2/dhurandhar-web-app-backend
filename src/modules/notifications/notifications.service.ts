@@ -162,6 +162,12 @@ export class NotificationsService implements OnModuleInit {
   }
 
   async listTemplates(query: NotificationTemplateQueryDto) {
+    const parsedPage = Number(query.page ?? 1);
+    const parsedPageSize = Number(query.pageSize ?? 20);
+    const page = Number.isFinite(parsedPage) ? Math.max(Math.trunc(parsedPage), 1) : 1;
+    const pageSize = Number.isFinite(parsedPageSize)
+      ? Math.min(Math.max(Math.trunc(parsedPageSize), 1), 100)
+      : 20;
     const where: Prisma.NotificationTemplateWhereInput = {
       channel: query.channel ?? undefined,
       isActive: this.parseOptionalBoolean(query.isActive),
@@ -174,10 +180,17 @@ export class NotificationsService implements OnModuleInit {
       ];
     }
 
-    return this.prisma.notificationTemplate.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-    });
+    const [total, data] = await this.prisma.$transaction([
+      this.prisma.notificationTemplate.count({ where }),
+      this.prisma.notificationTemplate.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+    ]);
+
+    return { data, total, page, pageSize };
   }
 
   async createTemplate(dto: NotificationTemplateCreateDto) {

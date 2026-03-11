@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../infra/prisma/prisma.service';
-import { RoleCreateDto, RoleUpdateDto } from './dto';
+import { RoleCreateDto, RoleListQueryDto, RoleUpdateDto } from './dto';
 
 const SYSTEM_ROLE_KEYS = new Set(['ADMIN_SUPER', 'STUDENT']);
 const CORE_RBAC_PERMISSIONS = [
@@ -40,32 +40,49 @@ export class AccessControlService {
     });
   }
 
-  async listRoles() {
+  async listRoles(query: RoleListQueryDto) {
     await this.ensureCorePermissions();
 
-    const roles = await this.prisma.role.findMany({
-      orderBy: { name: 'asc' },
-      include: {
-        rolePermissions: {
-          include: {
-            permission: {
-              select: {
-                id: true,
-                key: true,
-                description: true,
+    const parsedPage = Number(query.page ?? 1);
+    const parsedPageSize = Number(query.pageSize ?? 20);
+    const page = Number.isFinite(parsedPage) ? Math.max(Math.trunc(parsedPage), 1) : 1;
+    const pageSize = Number.isFinite(parsedPageSize)
+      ? Math.min(Math.max(Math.trunc(parsedPageSize), 1), 100)
+      : 20;
+
+    const [total, roles] = await this.prisma.$transaction([
+      this.prisma.role.count(),
+      this.prisma.role.findMany({
+        orderBy: { name: 'asc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        include: {
+          rolePermissions: {
+            include: {
+              permission: {
+                select: {
+                  id: true,
+                  key: true,
+                  description: true,
+                },
               },
             },
           },
-        },
-        _count: {
-          select: {
-            userRoles: true,
+          _count: {
+            select: {
+              userRoles: true,
+            },
           },
         },
-      },
-    });
+      }),
+    ]);
 
-    return roles.map((role) => this.mapRole(role));
+    return {
+      data: roles.map((role) => this.mapRole(role)),
+      total,
+      page,
+      pageSize,
+    };
   }
 
   async getRole(roleId: string) {

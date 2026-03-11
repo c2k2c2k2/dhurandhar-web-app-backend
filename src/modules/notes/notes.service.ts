@@ -152,6 +152,13 @@ export class NotesService {
   }
 
   async listAdminNotes(query: NoteQueryDto) {
+    const parsedPage = Number(query.page ?? 1);
+    const parsedPageSize = Number(query.pageSize ?? 20);
+    const page = Number.isFinite(parsedPage) ? Math.max(Math.trunc(parsedPage), 1) : 1;
+    const pageSize = Number.isFinite(parsedPageSize)
+      ? Math.min(Math.max(Math.trunc(parsedPageSize), 1), 100)
+      : 20;
+
     const where = {
       subjectId: query.subjectId ?? undefined,
       isPublished: query.isPublished ? query.isPublished === 'true' : undefined,
@@ -159,11 +166,18 @@ export class NotesService {
       topics: query.topicId ? { some: { topicId: query.topicId } } : undefined,
     };
 
-    return this.prisma.note.findMany({
-      where,
-      include: { topics: true },
-      orderBy: { updatedAt: 'desc' },
-    });
+    const [total, data] = await this.prisma.$transaction([
+      this.prisma.note.count({ where }),
+      this.prisma.note.findMany({
+        where,
+        include: { topics: true },
+        orderBy: { updatedAt: 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+    ]);
+
+    return { data, total, page, pageSize };
   }
 
   async listNotes(query: NoteQueryDto) {

@@ -159,30 +159,54 @@ export class QuestionBankService {
   }
 
   async listAdminQuestions(query: QuestionQueryDto) {
-    const where = {
+    const parsedPage = Number(query.page ?? 1);
+    const parsedPageSize = Number(query.pageSize ?? 20);
+    const page = Number.isFinite(parsedPage) ? Math.max(Math.trunc(parsedPage), 1) : 1;
+    const pageSize = Number.isFinite(parsedPageSize)
+      ? Math.min(Math.max(Math.trunc(parsedPageSize), 1), 100)
+      : 20;
+    const search = query.q?.trim();
+
+    const where: Prisma.QuestionWhereInput = {
       subjectId: query.subjectId ?? undefined,
       topicId: query.topicId ?? undefined,
       type: query.type ?? undefined,
       difficulty: query.difficulty ?? undefined,
       isPublished: query.isPublished ? query.isPublished === 'true' : undefined,
+      searchText: search
+        ? {
+            contains: search,
+            mode: 'insensitive',
+          }
+        : undefined,
     };
 
-    const questions = await this.prisma.question.findMany({
-      where,
-      orderBy: { updatedAt: 'desc' },
-      include: {
-        topic: {
-          select: {
-            name: true,
+    const [total, questions] = await this.prisma.$transaction([
+      this.prisma.question.count({ where }),
+      this.prisma.question.findMany({
+        where,
+        orderBy: { updatedAt: 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        include: {
+          topic: {
+            select: {
+              name: true,
+            },
           },
         },
-      },
-    });
+      }),
+    ]);
 
-    return questions.map(({ topic, ...question }) => ({
-      ...question,
-      topicName: topic?.name ?? null,
-    }));
+    return {
+      data: questions.map(({ topic, ...question }) => ({
+        ...question,
+        topicName: topic?.name ?? null,
+      })),
+      total,
+      page,
+      pageSize,
+    };
   }
 
   async listQuestions(query: QuestionQueryDto) {

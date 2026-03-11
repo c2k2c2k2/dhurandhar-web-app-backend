@@ -16,4 +16,12 @@ export class NoteQueryDto {
   @IsOptional()
   @IsBooleanString()
   isPremium?: string;
+
+  @IsOptional()
+  @IsString()
+  page?: string;
+
+  @IsOptional()
+  @IsString()
+  pageSize?: string;
 }

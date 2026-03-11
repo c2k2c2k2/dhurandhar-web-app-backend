@@ -1,10 +1,20 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Audit } from '../../common/decorators';
 import { JwtAuthGuard } from '../auth/guards';
 import { Policy, RequireUserType } from '../authorization/decorators';
 import { PolicyGuard } from '../authorization/guards';
-import { RoleCreateDto, RoleUpdateDto } from './dto';
+import { RoleCreateDto, RoleListQueryDto, RoleUpdateDto } from './dto';
 import { AccessControlService } from './access-control.service';
 
 @ApiTags('admin-rbac')
@@ -24,8 +34,8 @@ export class AdminAccessControlController {
   @Get('roles')
   @RequireUserType('ADMIN')
   @Policy('rbac.read')
-  listRoles() {
-    return this.accessControlService.listRoles();
+  listRoles(@Query() query: RoleListQueryDto) {
+    return this.accessControlService.listRoles(query);
   }
 
   @Get('roles/:roleId')

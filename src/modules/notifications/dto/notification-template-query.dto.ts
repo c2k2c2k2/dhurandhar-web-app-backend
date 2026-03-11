@@ -13,4 +13,12 @@ export class NotificationTemplateQueryDto {
   @IsOptional()
   @IsString()
   isActive?: string;
+
+  @IsOptional()
+  @IsString()
+  page?: string;
+
+  @IsOptional()
+  @IsString()
+  pageSize?: string;
 }
