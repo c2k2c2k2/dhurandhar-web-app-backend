@@ -18,12 +18,22 @@ import {
 } from './dto';
 
 type BreakdownTotals = { correct: number; wrong: number; total: number };
+type TimeRange = { start: Date; end: Date };
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const MINUTE_MS = 60 * 1000;
+const INDIA_OFFSET_MS = 5.5 * 60 * MINUTE_MS;
+const STREAK_LOOKBACK_DAYS = 365;
 
 @Injectable()
 export class AnalyticsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async getStudentSummary(userId: string) {
+    const now = new Date();
+    const { start: todayStart, end: todayEnd } = this.getIndiaDayRange(now);
+    const streakLookbackStart = new Date(todayStart.getTime() - (STREAK_LOOKBACK_DAYS - 1) * DAY_MS);
+
     const [
       noteTotal,
       noteCompleted,
@@ -37,6 +47,9 @@ export class AnalyticsService {
       attemptEvaluated,
       attemptAvg,
       attemptLast,
+      noteSessions,
+      practiceSessions,
+      attempts,
     ] = await Promise.all([
       this.prisma.noteProgress.count({ where: { userId } }),
       this.prisma.noteProgress.count({
@@ -78,12 +91,73 @@ export class AnalyticsService {
         orderBy: { createdAt: 'desc' },
         select: { createdAt: true },
       }),
+      this.prisma.noteViewSession.findMany({
+        where: {
+          userId,
+          OR: [
+            { createdAt: { gte: streakLookbackStart } },
+            { lastSeenAt: { gte: streakLookbackStart } },
+            { revokedAt: { gte: streakLookbackStart } },
+          ],
+        },
+        select: {
+          createdAt: true,
+          lastSeenAt: true,
+          revokedAt: true,
+        },
+      }),
+      this.prisma.practiceSession.findMany({
+        where: {
+          userId,
+          OR: [
+            { startedAt: { gte: streakLookbackStart } },
+            { endedAt: { gte: streakLookbackStart } },
+          ],
+        },
+        select: {
+          startedAt: true,
+          endedAt: true,
+        },
+      }),
+      this.prisma.attempt.findMany({
+        where: {
+          userId,
+          OR: [
+            { startedAt: { gte: streakLookbackStart } },
+            { submittedAt: { gte: streakLookbackStart } },
+          ],
+        },
+        select: {
+          startedAt: true,
+          submittedAt: true,
+        },
+      }),
     ]);
 
     const practiceAccuracy =
       practiceTotal > 0 ? Math.round((practiceCorrect / practiceTotal) * 100) : 0;
     const noteCompletionRate =
       noteTotal > 0 ? Math.round((noteCompleted / noteTotal) * 100) : 0;
+    const activityRanges: TimeRange[] = [
+      ...noteSessions
+        .map((session) =>
+          this.buildRange(session.createdAt, session.revokedAt ?? session.lastSeenAt ?? session.createdAt),
+        )
+        .filter((range): range is TimeRange => Boolean(range)),
+      ...practiceSessions
+        .map((session) => this.buildRange(session.startedAt, session.endedAt ?? now))
+        .filter((range): range is TimeRange => Boolean(range)),
+      ...attempts
+        .map((attempt) => this.buildRange(attempt.startedAt, attempt.submittedAt ?? now))
+        .filter((range): range is TimeRange => Boolean(range)),
+    ];
+    const streakDays = this.calculateStreakDays(activityRanges, now);
+    const todayMinutes = this.calculateTodayMinutes(
+      activityRanges,
+      todayStart,
+      todayEnd,
+    );
+    const lastActiveAt = this.getLastActiveAt(activityRanges);
 
     return {
       notes: {
@@ -107,7 +181,133 @@ export class AnalyticsService {
         averageScore: attemptAvg._avg.totalScore ?? 0,
         lastAttemptAt: attemptLast?.createdAt ?? null,
       },
+      activity: {
+        streakDays,
+        todayMinutes,
+        lastActiveAt,
+      },
     };
+  }
+
+  private buildRange(start: Date | null | undefined, end: Date | null | undefined) {
+    if (!start || !end) {
+      return null;
+    }
+
+    const safeStart = new Date(start);
+    const safeEnd = new Date(end);
+    if (Number.isNaN(safeStart.getTime()) || Number.isNaN(safeEnd.getTime())) {
+      return null;
+    }
+
+    if (safeEnd.getTime() < safeStart.getTime()) {
+      return { start: safeEnd, end: safeStart };
+    }
+
+    return { start: safeStart, end: safeEnd };
+  }
+
+  private calculateStreakDays(ranges: TimeRange[], reference: Date) {
+    if (ranges.length === 0) {
+      return 0;
+    }
+
+    const activeDayKeys = new Set<string>();
+    ranges.forEach((range) => this.addIndiaDayKeys(activeDayKeys, range.start, range.end));
+
+    let streak = 0;
+    let cursor = this.getIndiaDayStart(reference);
+
+    while (activeDayKeys.has(this.toIndiaDayKey(cursor))) {
+      streak += 1;
+      cursor = new Date(cursor.getTime() - DAY_MS);
+    }
+
+    return streak;
+  }
+
+  private calculateTodayMinutes(ranges: TimeRange[], dayStart: Date, dayEnd: Date) {
+    const clipped = ranges
+      .map((range) => ({
+        start: new Date(Math.max(range.start.getTime(), dayStart.getTime())),
+        end: new Date(Math.min(range.end.getTime(), dayEnd.getTime())),
+      }))
+      .filter((range) => range.end.getTime() > range.start.getTime())
+      .sort((left, right) => left.start.getTime() - right.start.getTime());
+
+    if (clipped.length === 0) {
+      return 0;
+    }
+
+    const merged: TimeRange[] = [];
+    for (const range of clipped) {
+      const last = merged[merged.length - 1];
+      if (!last || range.start.getTime() > last.end.getTime()) {
+        merged.push(range);
+        continue;
+      }
+
+      if (range.end.getTime() > last.end.getTime()) {
+        last.end = range.end;
+      }
+    }
+
+    const totalMs = merged.reduce(
+      (sum, range) => sum + (range.end.getTime() - range.start.getTime()),
+      0,
+    );
+    return Math.round(totalMs / MINUTE_MS);
+  }
+
+  private addIndiaDayKeys(target: Set<string>, start: Date, end: Date) {
+    let cursor = this.getIndiaDayStart(start);
+    const last = this.getIndiaDayStart(end);
+
+    while (cursor.getTime() <= last.getTime()) {
+      target.add(this.toIndiaDayKey(cursor));
+      cursor = new Date(cursor.getTime() + DAY_MS);
+    }
+  }
+
+  private getLastActiveAt(ranges: TimeRange[]) {
+    if (ranges.length === 0) {
+      return null;
+    }
+
+    return ranges.reduce<Date | null>((latest, range) => {
+      if (!latest || range.end.getTime() > latest.getTime()) {
+        return range.end;
+      }
+      return latest;
+    }, null);
+  }
+
+  private getIndiaDayRange(reference: Date) {
+    const start = this.getIndiaDayStart(reference);
+    return {
+      start,
+      end: new Date(start.getTime() + DAY_MS),
+    };
+  }
+
+  private getIndiaDayStart(reference: Date) {
+    const shifted = new Date(reference.getTime() + INDIA_OFFSET_MS);
+    const shiftedStart = new Date(
+      Date.UTC(
+        shifted.getUTCFullYear(),
+        shifted.getUTCMonth(),
+        shifted.getUTCDate(),
+      ),
+    );
+    return new Date(shiftedStart.getTime() - INDIA_OFFSET_MS);
+  }
+
+  private toIndiaDayKey(reference: Date) {
+    const shifted = new Date(reference.getTime() + INDIA_OFFSET_MS);
+    const year = shifted.getUTCFullYear();
+    const month = String(shifted.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(shifted.getUTCDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
   }
 
   async listNoteProgress(userId: string, query: AnalyticsNotesQueryDto) {

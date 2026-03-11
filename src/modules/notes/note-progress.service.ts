@@ -6,6 +6,12 @@ import { NoteProgressDto } from './dto';
 export class NoteProgressService {
   constructor(private readonly prisma: PrismaService) {}
 
+  async getProgress(noteId: string, userId: string) {
+    return this.prisma.noteProgress.findUnique({
+      where: { noteId_userId: { noteId, userId } },
+    });
+  }
+
   async updateProgress(noteId: string, userId: string, dto: NoteProgressDto) {
     return this.prisma.noteProgress.upsert({
       where: { noteId_userId: { noteId, userId } },

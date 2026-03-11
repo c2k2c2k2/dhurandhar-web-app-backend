@@ -72,6 +72,16 @@ export class NotesController {
   }
 
   @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @Get(':noteId/progress')
+  getProgress(
+    @Param('noteId') noteId: string,
+    @CurrentUser() user: { userId: string },
+  ) {
+    return this.noteProgressService.getProgress(noteId, user.userId);
+  }
+
+  @ApiBearerAuth()
   @UseGuards(OptionalJwtAuthGuard)
   @Get(':noteId/content')
   async getContent(
